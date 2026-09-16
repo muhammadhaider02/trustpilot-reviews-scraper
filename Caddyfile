@@ -3,16 +3,27 @@
 #
 # The container publishes on 127.0.0.1 only (see docker-compose.yml), so this is the sole
 # public route in. Install on the host, not in the container: `apt install caddy`.
+# Timeouts are a GLOBAL server option in Caddy v2, not a site directive - a `timeouts` block
+# inside the site below is a parse error and Caddy will refuse to start.
+#
+# A scrape can occupy a connection for MAX_PAGES x FETCH_TIMEOUT_MS plus retries. Keep write
+# above that worst case or Caddy will cut off scrapes the app would have finished.
+#
+# Note these apply to every site this Caddy instance serves, including reddit-reviews if it
+# shares the host - global options appear ONCE, first, for the whole instance.
+{
+	servers {
+		timeouts {
+			read_body   30s
+			write       300s
+			idle        320s
+		}
+	}
+}
+
 reviews.example.com {
     reverse_proxy 127.0.0.1:8000
 
-    # A scrape can occupy a connection for MAX_PAGES x FETCH_TIMEOUT_MS plus retries.
-    # Keep this above that worst case or Caddy will cut off scrapes the app would have finished.
-    timeouts {
-        read_body   30s
-        write       300s
-        idle        320s
-    }
 
     # /health is unauthenticated by design so uptime checks can reach it, but it exposes
     # request counters. Uncomment to keep it off the public internet.
