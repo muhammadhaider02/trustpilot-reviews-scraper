@@ -4,7 +4,7 @@
 
 **FETCH. PARSE. SERVE.**
 
-[![CI](https://github.com/haider-ecombench/trustpilot-reviews/actions/workflows/ci.yml/badge.svg)](https://github.com/haider-ecombench/trustpilot-reviews/actions/workflows/ci.yml)
+[![CI](https://github.com/haider-ecombench/trustpilot-reviews-scraper/actions/workflows/ci.yml/badge.svg)](https://github.com/haider-ecombench/trustpilot-reviews-scraper/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![uv](https://img.shields.io/badge/uv-Package_Manager-DE5FE9?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -29,8 +29,8 @@ A real browser is required: Trustpilot sits behind a CloudFront bot challenge th
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Runs as a single FastAPI process.
 
 ```bash
-git clone https://github.com/haider-ecombench/trustpilot-reviews.git
-cd trustpilot-reviews
+git clone https://github.com/haider-ecombench/trustpilot-reviews-scraper.git
+cd trustpilot-reviews-scraper
 
 uv sync                       # dependencies into a uv-managed venv
 uv run scrapling install      # stealth browser (once)
