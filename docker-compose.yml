@@ -1,0 +1,47 @@
+# Production topology: one container behind a TLS reverse proxy on the host.
+#
+# Memory model. Scrapling launches a full Chromium per fetch and tears it down again
+# (StealthyFetcher.fetch -> `with StealthySession(...)`), so usage is spiky, not cumulative:
+#   peak ~= MAX_CONCURRENCY x one browser (~400MB) + the Python process (~250MB)
+# MAX_CONCURRENCY is what keeps the app inside its budget. mem_limit below is a blast-radius
+# guard for the host: hitting it means the kernel OOM-kills the container, dropping in-flight
+# scrapes. Size MAX_CONCURRENCY so you never reach it.
+services:
+  scraper:
+    build: .
+    image: trustpilot-reviews:latest
+    container_name: trustpilot-reviews
+    restart: unless-stopped
+    env_file: .env
+
+    # Loopback only. Docker publishes ports straight past UFW, so 8000:8000 would put the
+    # API on the public internet no matter what the firewall says. The reverse proxy is
+    # the only thing that should reach it.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    # 3g fits MAX_CONCURRENCY=3 with headroom on an 8GB box. On a 4GB VPS use 2g and
+    # MAX_CONCURRENCY=2. memswap_limit == mem_limit disables swap for the container:
+    # a browser thrashing swap is slower and harder to diagnose than one that dies.
+    mem_limit: 3g
+    memswap_limit: 3g
+    mem_reservation: 1g
+
+    # Chromium forks heavily and a fetch that times out can orphan its process tree.
+    # init: true runs a real init as PID 1 so those get reaped instead of accumulating
+    # as zombies; pids_limit stops a fork storm from taking the host down with it.
+    init: true
+    pids_limit: 512
+
+    # Scrapling already passes --disable-dev-shm-usage, so Chromium puts shared memory in
+    # /tmp on disk rather than /dev/shm. This is insurance for the paths that ignore that
+    # flag, not the main lever. Deliberately NOT a tmpfs /tmp: tmpfs pages count against
+    # mem_limit, so it would eat the browser's own budget.
+    shm_size: 256m
+
+    # Chromium is verbose. Without this the json log grows until the disk fills.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

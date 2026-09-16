@@ -239,6 +239,7 @@ def fetch_html(url: str) -> tuple[int, str]:
             url,
             headless=True,
             network_idle=True,
+            disable_resources=settings.block_resources,
             solve_cloudflare=settings.solve_cloudflare,
             humanize=True,
             block_webrtc=True,

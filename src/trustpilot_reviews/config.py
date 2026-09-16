@@ -33,6 +33,10 @@ class Settings:
     # Trustpilot sits behind a CloudFront JS challenge, not Cloudflare. The stealth browser passes it
     # without the Cloudflare solver, but the flag is kept so it can be flipped without a deploy.
     solve_cloudflare: bool = _env_bool("SOLVE_CLOUDFLARE", False)
+    # We only ever read __NEXT_DATA__ out of the HTML document, so images, fonts, CSS and media
+    # are pure memory and bandwidth cost in the browser. Blocking them is the single biggest
+    # memory lever we have. Flip to false if Trustpilot starts challenging the stripped page.
+    block_resources: bool = _env_bool("BLOCK_RESOURCES", True)
     # Hard cap on pages per band call regardless of `max` requested. 20 reviews per page.
     max_pages: int = _env_int("MAX_PAGES", 3)
     # Pause between pages of the same band call, seconds.
