@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+
+  docker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      API_TOKEN: ci-smoke-token
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t trustpilot-reviews:ci .
+
+      - name: Start container
+        run: |
+          docker run -d --name scraper -p 8000:8000 -e API_TOKEN="$API_TOKEN" trustpilot-reviews:ci
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/health && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8000/health
+
+      - name: Auth is enforced
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/trustpilot \
+            -H 'Content-Type: application/json' -d '{"domain":"gymshark.com"}')
+          test "$code" = "401"
+
+      - name: Live scrape through the container
+        run: |
+          curl -s --max-time 240 -o out.json -w 'status=%{http_code} secs=%{time_total}\n' \
+            -X POST http://127.0.0.1:8000/trustpilot \
+            -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
+            -d '{"domain":"gymshark.com","stars":[3],"max":5,"months":12}' | tee status.txt
+          grep -q 'status=200' status.txt
+          python3 -c "
+          import json; d=json.load(open('out.json'))
+          assert isinstance(d, list) and len(d) > 0, d
+          assert all(r['rating'] == 3 for r in d), [r['rating'] for r in d]
+          assert d[0]['companyTrustScore'], d[0]
+          print(f'{len(d)} reviews, trust score {d[0][\"companyTrustScore\"]}, total {d[0][\"companyTotalReviews\"]}')
+          "
+
+      - name: Missing brand returns 404
+        run: |
+          curl -s --max-time 240 -o err.json -w 'status=%{http_code}\n' \
+            -X POST http://127.0.0.1:8000/trustpilot \
+            -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
+            -d '{"domain":"no-such-brand-zz9q.com","stars":[3]}' | tee status.txt
+          grep -q 'status=404' status.txt
+          grep -q 'not found' err.json
+
+      - name: Container logs
+        if: always()
+        run: docker logs scraper
