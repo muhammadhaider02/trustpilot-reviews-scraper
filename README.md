@@ -89,7 +89,8 @@ All configuration is environment variables in `.env`. **`.env.example` is the ca
 | `API_TOKEN` | *(empty)* | bearer token callers must send; required in production |
 | `SCRAPER_PROXY` | *(none)* | proxy URL for the browser; add when the server's IP starts being challenged |
 | `MAX_CONCURRENCY` | `3` | browser fetches allowed at once |
-| `FETCH_TIMEOUT_MS` | `60000` | per-page browser timeout |
+| `FETCH_TIMEOUT_MS` | `30000` | per-page browser timeout; **caps dead time, is not headroom** — see below |
+| `BLOCK_RESOURCES` | `true` | block images/fonts/CSS/media in the browser; only `__NEXT_DATA__` is ever read |
 | `MAX_PAGES` | `3` | hard cap on pages per request |
 | `PAGE_DELAY_S` | `2` | pause between pages and before a retry |
 | `PORT` | `8000` | listen port |
@@ -106,11 +107,44 @@ Measured on a residential connection: one page (20 reviews) in 13–20 s, two pa
 
 ## Deployment
 
-Production runs as a single Docker container on a Linux VPS. The `Dockerfile` installs the stealth browser into `/opt/cache` and runs the service as a non-root user on port 8000; put a reverse proxy with TLS in front of it and set `API_TOKEN`.
+Production runs as a single Docker container on a Linux VPS, behind a TLS reverse proxy.
+`docker-compose.yml` is the deployment topology — it carries the memory limits, process
+reaping and log rotation that a bare `docker run` would not.
 
 ```bash
-docker build -t trustpilot-reviews .
-docker run -d --restart unless-stopped -p 8000:8000 --env-file .env trustpilot-reviews
+git clone https://github.com/haider-ecombench/trustpilot-reviews-scraper.git
+cd trustpilot-reviews-scraper
+cp .env.example .env          # set API_TOKEN
+docker compose up -d --build  # first build is slow: it downloads Chromium
 ```
 
-GitHub Actions CI runs on every push to `main`: the unit tests, then a full image build that starts the container and exercises `/health`, token enforcement, a live scrape and the `404` path.
+Then point `Caddyfile` at your domain and `caddy reload`. The container publishes on
+`127.0.0.1:8000` only, so the reverse proxy is the sole public route in — **note that
+`docker run -p 8000:8000` would bypass UFW entirely and expose the API publicly**.
+
+### Sizing
+
+Measured against a live container, not estimated:
+
+| | |
+|---|---|
+| Idle | 41 MiB |
+| Peak, `MAX_CONCURRENCY=1` | 559 MiB |
+| Peak, `MAX_CONCURRENCY=3` | 994 MiB |
+| Per Chromium | ~430 MiB |
+
+Scrapling launches and tears down a browser per fetch, so memory is spiky, not cumulative.
+`MAX_CONCURRENCY` keeps the app inside its budget; the `mem_limit` in `docker-compose.yml`
+is a blast-radius guard for the host — reaching it means the kernel OOM-kills the container
+and drops in-flight scrapes. A 4 GB VPS is sufficient at `MAX_CONCURRENCY=3`.
+
+### Latency
+
+A warm page is 10–14 s. A minority never reach network idle and wait out the whole
+`FETCH_TIMEOUT_MS` before returning complete data, so that timeout sets the worst case.
+Do not raise it to "allow more time" — that makes the worst case worse. The wait itself is
+load-bearing: disabling `network_idle` returned 5/5 HTTP 403, because it is what gives the
+CloudFront challenge time to complete.
+
+CI runs on every push to `main`: unit tests, then a full image build that starts the
+container and exercises `/health`, token enforcement, a live scrape and the `404` path.

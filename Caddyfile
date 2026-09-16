@@ -1,0 +1,30 @@
+# TLS terminator in front of the scraper. Caddy obtains and renews the certificate itself,
+# so the DNS A record must already point here before it starts.
+#
+# The container publishes on 127.0.0.1 only (see docker-compose.yml), so this is the sole
+# public route in. Install on the host, not in the container: `apt install caddy`.
+reviews.example.com {
+    reverse_proxy 127.0.0.1:8000
+
+    # A scrape can occupy a connection for MAX_PAGES x FETCH_TIMEOUT_MS plus retries.
+    # Keep this above that worst case or Caddy will cut off scrapes the app would have finished.
+    timeouts {
+        read_body   30s
+        write       300s
+        idle        320s
+    }
+
+    # /health is unauthenticated by design so uptime checks can reach it, but it exposes
+    # request counters. Uncomment to keep it off the public internet.
+    # @health path /health
+    # handle @health {
+    #     @external not remote_ip 127.0.0.1 <your-monitoring-ip>
+    #     respond @external 403
+    # }
+
+    encode gzip
+    log {
+        output file /var/log/caddy/trustpilot-reviews.log
+        format json
+    }
+}
