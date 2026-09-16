@@ -238,6 +238,11 @@ def fetch_html(url: str) -> tuple[int, str]:
         page = StealthyFetcher.fetch(
             url,
             headless=True,
+            # Load-bearing: this wait is what lets the CloudFront JS challenge complete.
+            # Measured 2026-09-16 - turning it off returned in ~6s with 5/5 HTTP 403; turning it
+            # back on returned 5/5 HTTP 200 on the same calls. It costs the full FETCH_TIMEOUT_MS
+            # on the minority of pages whose background traffic never settles, so cap that timeout
+            # rather than removing this.
             network_idle=True,
             disable_resources=settings.block_resources,
             solve_cloudflare=settings.solve_cloudflare,
