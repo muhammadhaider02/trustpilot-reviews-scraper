@@ -6,8 +6,9 @@
 # Timeouts are a GLOBAL server option in Caddy v2, not a site directive - a `timeouts` block
 # inside the site below is a parse error and Caddy will refuse to start.
 #
-# A scrape can occupy a connection for MAX_PAGES x FETCH_TIMEOUT_MS plus retries. Keep write
-# above that worst case or Caddy will cut off scrapes the app would have finished.
+# A scrape is now bounded by SCRAPE_BUDGET_S (200s, see .env.example) - past it the app returns
+# what it has rather than running on. write 300s keeps a comfortable margin over that ceiling;
+# in practice n8n gives up first at 250s, so this timeout should never be what fires.
 #
 # Note these apply to every site this Caddy instance serves, including reddit-reviews if it
 # shares the host - global options appear ONCE, first, for the whole instance.
