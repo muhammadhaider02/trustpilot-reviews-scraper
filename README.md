@@ -65,7 +65,7 @@ Layout: `scraper.py` (fetch, parse, paginate, retry), `mapping.py` (output shape
 
 ## Deployment
 
-Production runs as a single Docker container on a Linux VPS, behind a TLS reverse proxy. `docker-compose.yml` is the deployment topology. It carries the memory limits, process reaping and log rotation that a bare `docker run` would not, and its comments record the measurements each limit is sized against.
+Production runs as a single Docker container on the same VPS as n8n, attached to n8n's Docker network. `docker-compose.yml` is the deployment topology. It carries the memory limits, process reaping, shutdown grace and log rotation that a bare `docker run` would not, and its comments record the measurements each limit is sized against.
 
 ```bash
 git clone https://github.com/haider-ecombench/trustpilot-reviews-scraper.git
@@ -74,6 +74,14 @@ cp .env.example .env          # set API_TOKEN
 docker compose up -d --build  # first build is slow: it downloads Chromium
 ```
 
-Then point `Caddyfile` at your domain and `caddy reload`. The container publishes on `127.0.0.1:8000` only, so the reverse proxy is the sole public route in. **Note that `docker run -p 8000:8000` would bypass UFW entirely and expose the API publicly**.
+n8n reaches the service by container name over the shared network:
+
+```
+http://trustpilot-reviews:8000/trustpilot
+```
+
+Nothing is published to the host and nothing is reachable from the internet, so there is no domain, no TLS certificate and no reverse proxy to maintain for this service. The VPS already runs Traefik on 80/443 for n8n's own UI; adding a second proxy would fail to bind. `API_TOKEN` still applies and is still worth setting, so a compromised container on the network cannot drive the scraper freely.
+
+The network is declared external in `docker-compose.yml` as `n8n_default`, the default Compose creates for n8n's project. If that name differs the container refuses to start and says so; `docker network ls` gives the real one.
 
 CI runs on pushes to `main` and on pull requests: unit tests, plus a full image build that starts the container and exercises `/health`, token enforcement, a live scrape and the `404` path.
