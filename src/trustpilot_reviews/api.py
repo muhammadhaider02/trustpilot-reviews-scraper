@@ -3,6 +3,9 @@
 POST /trustpilot  -> JSON array of review items (same names Stage 4's Sort node reads from Apify)
 GET  /health      -> counters, useful for Pipeline Health Check
 
+A 200 may be a partial result: if the scrape hits SCRAPE_BUDGET_S it returns the reviews it
+already collected and sets `X-Truncated: true`. The body looks identical to a complete run.
+
 Error contract, matched to Stage 4's retry logic:
   404 {"error": {...}}  brand has no Trustpilot page -> Stage 4 burns one of the brand's retries
   400 {"error": {...}}  invalid domain               -> same, brand-side
@@ -28,7 +31,7 @@ from .scraper import TrustpilotError, scrape
 
 log = logging.getLogger("trustpilot_reviews.api")
 
-counters = {"requests": 0, "ok": 0, "empty": 0, "not_found": 0, "blocked": 0, "failed": 0, "in_flight": 0}
+counters = {"requests": 0, "ok": 0, "empty": 0, "truncated": 0, "not_found": 0, "blocked": 0, "failed": 0, "in_flight": 0}
 _semaphore: asyncio.Semaphore | None = None
 
 
@@ -140,6 +143,10 @@ async def trustpilot(req: ScrapeRequest):
 
     items = to_items(result, req.include_company_info)
     counters["ok" if items else "empty"] += 1
+    # A truncated call is a 200, so without this counter it is invisible to anything but a
+    # per-request header read. A rising number here means the budget is being hit.
+    if result.truncated:
+        counters["truncated"] += 1
     log.info(
         "ok %s stars=%s reviews=%d/%d pages=%d %.1fs",
         result.domain, req.stars, len(items), result.total_count, result.pages_fetched, time.time() - started,
@@ -149,6 +156,9 @@ async def trustpilot(req: ScrapeRequest):
         "X-Pages-Fetched": str(result.pages_fetched),
         "X-Total-Available": str(result.total_count),
         "X-Trust-Score": str(result.business_unit.trust_score or ""),
+        # Distinguishes "that is all the reviews there were" from "we hit the time budget".
+        # Both are 200 with real reviews, so the body alone cannot tell you which happened.
+        "X-Truncated": "true" if result.truncated else "false",
     }
     return JSONResponse(content=items, headers=headers)
 

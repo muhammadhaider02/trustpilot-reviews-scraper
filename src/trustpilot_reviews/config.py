@@ -29,7 +29,7 @@ class Settings:
     # How many browser fetches may run at once. Stage 4 fires three band calls in parallel per brand.
     max_concurrency: int = _env_int("MAX_CONCURRENCY", 3)
     # Per-page browser timeout. Stage 4 allows 250s per band call, so keep pages well under that.
-    fetch_timeout_ms: int = _env_int("FETCH_TIMEOUT_MS", 60_000)
+    fetch_timeout_ms: int = _env_int("FETCH_TIMEOUT_MS", 30_000)
     # Trustpilot sits behind a CloudFront JS challenge, not Cloudflare. The stealth browser passes it
     # without the Cloudflare solver, but the flag is kept so it can be flipped without a deploy.
     solve_cloudflare: bool = _env_bool("SOLVE_CLOUDFLARE", False)
@@ -39,6 +39,11 @@ class Settings:
     block_resources: bool = _env_bool("BLOCK_RESOURCES", True)
     # Hard cap on pages per band call regardless of `max` requested. 20 reviews per page.
     max_pages: int = _env_int("MAX_PAGES", 3)
+    # Total wall-clock budget for one scrape. Nothing cancels a request once it starts - Starlette
+    # does not cancel handlers on client disconnect, and the browser runs in an uncancellable
+    # thread - so a caller that gives up does not free the browser. This is what frees it: the
+    # scrape stops starting new pages and returns what it has. Must stay under Stage 4's 250s.
+    scrape_budget_s: int = _env_int("SCRAPE_BUDGET_S", 200)
     # Pause between pages of the same band call, seconds.
     page_delay_s: float = float(os.environ.get("PAGE_DELAY_S", "2"))
     host: str = os.environ.get("HOST", "0.0.0.0")

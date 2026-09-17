@@ -30,8 +30,21 @@ services:
     # Chromium forks heavily and a fetch that times out can orphan its process tree.
     # init: true runs a real init as PID 1 so those get reaped instead of accumulating
     # as zombies; pids_limit stops a fork storm from taking the host down with it.
+    # Observed peaks: 413 PIDs while three fetches were launching, and 146 with five browsers
+    # already running. Chromium's thread count spikes hard during launch, so size this against
+    # the launch peak, not the steady state, and leave room for a teardown overlapping the next
+    # fetch - 512 did not. Hitting the cap makes fork() return EAGAIN, which Chromium reports as
+    # an opaque "Target closed", so it reads as a scrape failure rather than a resource limit.
     init: true
-    pids_limit: 512
+    pids_limit: 1024
+
+    # Docker's default is 10s, which SIGKILLs every in-flight scrape on redeploy: uvicorn stops
+    # accepting and waits for the handler, and that handler is blocked on a scrape that may
+    # legitimately run for SCRAPE_BUDGET_S. 210s is that budget plus slack for Chromium teardown -
+    # at exactly 200s a scrape that used its whole budget still gets killed during cleanup, which
+    # is the failure this exists to prevent. Costs nothing when nothing is in flight; Docker stops
+    # as soon as the process exits. Raise it with SCRAPE_BUDGET_S, never below it.
+    stop_grace_period: 210s
 
     # Scrapling already passes --disable-dev-shm-usage, so Chromium puts shared memory in
     # /tmp on disk rather than /dev/shm. This is insurance for the paths that ignore that

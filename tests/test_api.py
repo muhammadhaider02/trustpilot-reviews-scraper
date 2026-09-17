@@ -58,6 +58,22 @@ def test_post_returns_apify_shaped_items(client, monkeypatch):
     assert items[0]["companyUrl"] == "https://www.trustpilot.com/review/gymshark.com"
     assert seen == {"domain": "gymshark.com", "stars": [1, 2], "max_reviews": 30, "months": 12}
     assert r.headers["X-Pages-Fetched"] == "1"
+    assert r.headers["X-Truncated"] == "false"
+
+
+def test_truncated_result_is_flagged_in_the_headers(client, monkeypatch):
+    """A budget-truncated scrape is a 200 with real reviews, so the header is the only way the
+    caller can tell it apart from 'that is all the reviews there were'."""
+    import dataclasses
+
+    def fake_scrape(*a, **k):
+        return dataclasses.replace(canned_result(), truncated=True)
+
+    monkeypatch.setattr(api, "scrape", fake_scrape)
+    r = client.post("/trustpilot", json={"domain": "gymshark.com"})
+    assert r.status_code == 200
+    assert len(r.json()) == 20, "truncated still returns the reviews it did collect"
+    assert r.headers["X-Truncated"] == "true"
 
 
 def test_post_accepts_apify_body_verbatim(client, monkeypatch):
