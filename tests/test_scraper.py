@@ -8,10 +8,12 @@ from trustpilot_reviews import scraper
 from trustpilot_reviews.scraper import (
     NoTrustpilotPage,
     ScrapeBlocked,
+    ScrapeFailed,
     build_url,
     clean_domain,
     date_window,
     extract_next_data,
+    fetch_html,
     parse_page,
     scrape,
 )
@@ -30,6 +32,40 @@ def fixture_html(name: str) -> str:
 @pytest.fixture(autouse=True)
 def no_sleep(monkeypatch):
     monkeypatch.setattr(scraper.time, "sleep", lambda *_: None)
+
+
+@pytest.fixture
+def budget():
+    """Override SCRAPE_BUDGET_S on the frozen settings singleton, restoring it afterwards.
+
+    The budget is driven directly rather than by faking the clock: scrape() reserves a whole
+    page's worst case (ATTEMPTS x FETCH_TIMEOUT_MS + PAGE_DELAY_S, ~62s) before committing to
+    one, so shrinking the budget below that reservation exercises the real code path without
+    any test needing to spend or simulate wall-clock time.
+    """
+    original = scraper.settings.scrape_budget_s
+
+    def _set(seconds):
+        object.__setattr__(scraper.settings, "scrape_budget_s", seconds)
+
+    yield _set
+    object.__setattr__(scraper.settings, "scrape_budget_s", original)
+
+
+def two_page_fetcher(calls):
+    """A fetcher serving two distinct pages of 20 reviews, recording each call."""
+    base = json.loads((FIXTURES / "gymshark_neg_page1.json").read_text(encoding="utf-8"))
+    page2 = json.loads(json.dumps(base))
+    for r in page2["props"]["pageProps"]["reviews"]:
+        r["id"] = "p2-" + r["id"]
+    page2["props"]["pageProps"]["filters"]["pagination"]["currentPage"] = 2
+
+    def fetcher(url):
+        calls.append(url)
+        data = page2 if "page=2" in url else base
+        return 200, f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+
+    return fetcher
 
 
 # ------------------------------------------------------------------ url helpers
@@ -188,3 +224,97 @@ def test_scrape_recovers_when_retry_succeeds():
     res = scrape("gymshark.com", [1, 2], fetcher=fetcher)
     assert len(calls) == 2
     assert len(res.reviews) == 20
+
+
+# ------------------------------------------------------------------ time budget
+
+
+def test_scrape_truncates_when_another_page_will_not_fit(budget):
+    budget(1)  # far below the ~62s one page is allowed to cost
+    calls = []
+
+    res = scrape("gymshark.com", [1, 2], max_reviews=30, months=12, fetcher=two_page_fetcher(calls))
+
+    # Page 2 is never even attempted, and what page 1 found comes back as a normal result.
+    assert len(calls) == 1
+    assert res.pages_fetched == 1
+    assert len(res.reviews) == 20
+    assert res.truncated is True
+    # The caller can see the result is short: there was more available than we fetched.
+    assert res.total_pages > 1
+
+
+def test_scrape_budget_never_skips_the_first_page(budget):
+    budget(0)  # no budget at all
+    calls = []
+
+    # Returning zero reviews would read to Stage 4 as "this brand has no reviews in this band",
+    # which is a data lie. Page 1 is always attempted, however late we are.
+    res = scrape("gymshark.com", [1, 2], max_reviews=30, months=12, fetcher=two_page_fetcher(calls))
+    assert len(calls) == 1
+    assert len(res.reviews) == 20
+    assert res.truncated is True
+
+
+def test_scrape_is_not_truncated_on_a_normal_run():
+    calls = []
+
+    res = scrape("gymshark.com", [1, 2], max_reviews=30, months=12, fetcher=two_page_fetcher(calls))
+    assert len(calls) == 2
+    assert res.pages_fetched == 2
+    assert res.truncated is False, "a healthy scrape must never be flagged as truncated"
+
+
+def test_max_pages_truncation_is_not_flagged_as_a_deadline():
+    def fetcher(url):
+        return 200, fixture_html("gymshark_neg_page1.json")
+
+    # Stopping at MAX_PAGES is deliberate policy, already visible via pages_fetched vs
+    # total_pages. Conflating it with a missed deadline would make the signal useless.
+    res = scrape("gymshark.com", [1, 2], max_reviews=999, months=12, fetcher=fetcher)
+    assert res.truncated is False
+
+
+# ------------------------------------------------------------------ browser contract
+
+
+def test_fetch_page_retries_a_dead_browser():
+    calls = []
+
+    def fetcher(url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise ScrapeFailed("browser fetch failed: TargetClosedError: Target closed")
+        return 200, fixture_html("gymshark_neg_page1.json")
+
+    # Scrapling's hidden retries=3 used to cover a crashed Chromium; we pass retries=1 now, so
+    # this retry is the only one left. Deleting it turns one flaky launch into a 503.
+    res = scrape("gymshark.com", [1, 2], fetcher=fetcher)
+    assert len(calls) == 2
+    assert len(res.reviews) == 20
+
+
+def test_fetch_html_pins_the_scrapling_kwargs(monkeypatch):
+    import scrapling.fetchers as fetchers
+
+    seen = {}
+
+    class FakePage:
+        status = 200
+        html_content = "<html></html>"
+
+    class FakeFetcher:
+        @classmethod
+        def fetch(cls, url, **kwargs):
+            seen.update(kwargs)
+            return FakePage()
+
+    monkeypatch.setattr(fetchers, "StealthyFetcher", FakeFetcher)
+    status, _ = fetch_html("https://www.trustpilot.com/review/gymshark.com")
+
+    assert status == 200
+    # Scrapling's own default is 3, and it multiplies with every retry layer above it.
+    assert seen["retries"] == 1
+    # Camoufox-era names that scrapling 0.4.x swallows silently - they must not drift back in.
+    assert not {"humanize", "os_randomize", "geoip"} & set(seen)
+    assert seen["block_webrtc"] is True, "this one is real, unlike the three above"

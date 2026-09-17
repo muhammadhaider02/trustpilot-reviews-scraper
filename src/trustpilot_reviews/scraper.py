@@ -23,6 +23,10 @@ log = logging.getLogger(__name__)
 
 BASE = "https://www.trustpilot.com/review/"
 PER_PAGE = 20
+# Fetches per page before giving up. Named rather than inlined because scrape() has to price a
+# page before committing to it, and a cost estimate that drifts from the real retry count would
+# silently break the time budget.
+ATTEMPTS = 2
 NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
 
 # Trustpilot only offers these fixed date windows. A requested month count maps to the smallest
@@ -111,6 +115,10 @@ class ScrapeResult:
     seconds: float
     url: str
     selected_filters: dict = field(default_factory=dict)
+    # True when the time budget stopped us before MAX_PAGES or the date window did. The reviews
+    # are real either way, so this is the only thing separating "that is all there was" from
+    # "we ran out of time" - both return 200.
+    truncated: bool = False
 
 
 # --------------------------------------------------------------------------- URL
@@ -238,15 +246,27 @@ def fetch_html(url: str) -> tuple[int, str]:
         page = StealthyFetcher.fetch(
             url,
             headless=True,
+            # Load-bearing: this wait is what lets the CloudFront JS challenge complete.
+            # Measured 2026-09-16 - turning it off returned in ~6s with 5/5 HTTP 403; turning it
+            # back on returned 5/5 HTTP 200 on the same calls. It costs the full FETCH_TIMEOUT_MS
+            # on the minority of pages whose background traffic never settles, so cap that timeout
+            # rather than removing this.
             network_idle=True,
+            disable_resources=settings.block_resources,
             solve_cloudflare=settings.solve_cloudflare,
-            humanize=True,
             block_webrtc=True,
-            os_randomize=True,
-            geoip=True,
+            # Not redundant, and not safe to drop: Scrapling's own default is retries=3, and it
+            # multiplies with fetch_page's attempts and the page loop above it - 3 x 2 x 3 = 18
+            # navigations for one HTTP request, ~560s worst case. One retry lives in fetch_page,
+            # where it can tell a challenge from a dead browser; this layer just repeats blindly.
+            retries=1,
             proxy=settings.proxy,
             timeout=settings.fetch_timeout_ms,
         )
+        # Removed 2026-09-17: humanize / os_randomize / geoip. They are Camoufox-era (scrapling
+        # 0.2.x) arguments that do not exist in 0.4.15 - the msgspec validator absorbs unknown
+        # keys silently, so they read as active stealth while doing nothing at all. If Trustpilot
+        # starts challenging this server, do not rule these out; they were never on.
     except Exception as e:  # noqa: BLE001 - anything from the browser stack is a vendor failure
         raise ScrapeFailed(f"browser fetch failed: {type(e).__name__}: {e}"[:300]) from e
     return int(page.status), _html_of(page)
@@ -257,25 +277,34 @@ def _title_of(html: str) -> str:
     return re.sub(r"\s+", " ", m.group(1)).strip()[:120] if m else ""
 
 
-def fetch_page(url: str, fetcher: Callable[[str], tuple[int, str]] = fetch_html, attempts: int = 2) -> PageData:
-    """Fetch and parse one review page, retrying once on a challenge/non-200 (but not on 404)."""
+def fetch_page(url: str, fetcher: Callable[[str], tuple[int, str]] = fetch_html, attempts: int = ATTEMPTS) -> PageData:
+    """Fetch and parse one review page, retrying once on a challenge, a non-200 or a dead browser
+    (but never on 404)."""
     last_err: TrustpilotError | None = None
     for attempt in range(1, attempts + 1):
-        status, html = fetcher(url)
-        if status == 404:
-            raise NoTrustpilotPage(f"404 not found: no Trustpilot page at {url}")
-        if status != 200:
-            last_err = ScrapeBlocked(
-                f"trustpilot answered HTTP {status} (bot challenge or rate limit), title={_title_of(html)!r}"
-            )
+        try:
+            status, html = fetcher(url)
+        except ScrapeFailed as e:
+            # The browser itself died. This used to escape the loop uncaught, which was survivable
+            # only because Scrapling was silently retrying three times underneath us. Now that we
+            # pass retries=1, this is the only crash retry left in the stack - deleting it means a
+            # single flaky Chromium launch becomes a 503.
+            last_err = e
         else:
-            data = extract_next_data(html)
-            if data is None:
+            if status == 404:
+                raise NoTrustpilotPage(f"404 not found: no Trustpilot page at {url}")
+            if status != 200:
                 last_err = ScrapeBlocked(
-                    f"trustpilot served a page without __NEXT_DATA__ (challenge interstitial?), title={_title_of(html)!r}"
+                    f"trustpilot answered HTTP {status} (bot challenge or rate limit), title={_title_of(html)!r}"
                 )
             else:
-                return parse_page(data)
+                data = extract_next_data(html)
+                if data is None:
+                    last_err = ScrapeBlocked(
+                        f"trustpilot served a page without __NEXT_DATA__ (challenge interstitial?), title={_title_of(html)!r}"
+                    )
+                else:
+                    return parse_page(data)
         log.warning("attempt %d/%d failed for %s: %s", attempt, attempts, url, last_err)
         if attempt < attempts:
             time.sleep(settings.page_delay_s)
@@ -307,11 +336,27 @@ def scrape(
     page_no = 0
     first_url = build_url(domain, stars, months, 1)
     stop = False
+    truncated = False
+
+    # Worst case for one more page, and the wall-clock line we will not cross. We test whether
+    # there is room for a whole page rather than whether time is already up: a page started just
+    # under the deadline would otherwise overrun it by its entire cost. Page 1 is never skipped -
+    # returning zero reviews would be worse than returning late.
+    deadline = started + settings.scrape_budget_s
+    page_cost_s = ATTEMPTS * (settings.fetch_timeout_ms / 1000) + settings.page_delay_s
 
     while not stop:
         page_no += 1
         url = first_url if page_no == 1 else build_url(domain, stars, months, page_no)
         if page_no > 1:
+            if time.time() + page_cost_s > deadline:
+                truncated = True
+                page_no -= 1  # this page was priced, not fetched
+                log.info(
+                    "%s budget exhausted after %d page(s), returning %d review(s) early",
+                    domain, page_no, len(reviews),
+                )
+                break
             time.sleep(settings.page_delay_s)
         data = fetch_page(url, fetcher=fetcher)
 
@@ -356,4 +401,5 @@ def scrape(
         seconds=round(time.time() - started, 1),
         url=first_url,
         selected_filters=selected,
+        truncated=truncated,
     )

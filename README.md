@@ -4,15 +4,12 @@
 
 **FETCH. PARSE. SERVE.**
 
-[![CI](https://github.com/haider-ecombench/trustpilot-reviews-scraper/actions/workflows/ci.yml/badge.svg)](https://github.com/haider-ecombench/trustpilot-reviews-scraper/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![uv](https://img.shields.io/badge/uv-Package_Manager-DE5FE9?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Scrapling](https://img.shields.io/badge/Browser-Scrapling-FF6F00)](https://github.com/D4Vinci/Scrapling)
 
 Self-hosted Trustpilot review scraper with an HTTP API.
-
-[Quickstart](#quickstart) · [API](#api) · [Configuration](#configuration) · [Development](#development) · [Deployment](#deployment)
 
 </div>
 
@@ -42,75 +39,49 @@ uv run trustpilot-reviews serve                    # HTTP service on :8000
 
 Verify with `curl localhost:8000/health` (expects `"status":"ok"`); interactive API docs are at `/docs`.
 
+The service is driven over its HTTP API: `POST /trustpilot` takes a brand domain with `Authorization: Bearer <API_TOKEN>` and returns that brand's reviews newest first, while `GET /health` is unauthenticated and returns request counters. See `/docs` for the request fields, the response shape and the error contract.
+
 One-off scrapes from the command line, no server needed:
 
 ```bash
 uv run trustpilot-reviews scrape gymshark.com --stars 1,2 --max 20 --pretty
 ```
 
-## API
-
-`POST /trustpilot` with `Authorization: Bearer <API_TOKEN>`
-
-```json
-{ "domain": "gymshark.com", "stars": [1, 2], "max": 30, "months": 12 }
-```
-
-| Field | Default | Notes |
-|---|---|---|
-| `domain` | required | brand domain; URLs and `www.` are normalised |
-| `stars` | `[1,2,3,4,5]` | star ratings to include; filtered server-side by Trustpilot |
-| `max` | `20` | reviews to return, newest first (20 per page, capped by `MAX_PAGES`) |
-| `months` | `12` | date window: 1, 3, 6, 12, or `null` for all time |
-| `includeCompanyInfo` | `true` | attach TrustScore, review count and company URL to every item |
-
-Returns a JSON array of review items, newest first. Each item carries the review (`reviewId`, `rating`, `title`, `text`, `language`, `publishedDate`, `experienceDate`, `reviewerName`, `country`, `verified`, `likes`, `replyMessage`, …) and, when requested, the company (`companyUrl`, `companyDomain`, `companyName`, `companyWebsite`, `companyTrustScore`, `companyTotalReviews`, `companyReviewsLast12Months`, …).
-
-Response headers `X-Scrape-Seconds`, `X-Pages-Fetched`, `X-Total-Available` and `X-Trust-Score` help when debugging a caller.
-
-| Status | Meaning |
-|---|---|
-| `200` | review items (possibly an empty array) |
-| `400` | invalid domain |
-| `401` | missing or wrong bearer token |
-| `404` | the brand has no Trustpilot page |
-| `503` | the fetch was blocked by the bot challenge, or the browser failed |
-
-Error bodies are `{"error": {"type", "status", "message", "description"}}`. `404` and `400` are the caller's problem; `503` is ours.
-
-`GET /health` is unauthenticated and returns request counters (`ok`, `empty`, `not_found`, `blocked`, `failed`, `in_flight`).
-
 ## Configuration
 
-All configuration is environment variables in `.env`. **`.env.example` is the canonical list.**
+All configuration is environment variables in `.env`. **`.env.example` is the canonical list.** Copy it and fill it in; every variable is documented there alongside the measurement its default is based on.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `API_TOKEN` | *(empty)* | bearer token callers must send; required in production |
-| `SCRAPER_PROXY` | *(none)* | proxy URL for the browser; add when the server's IP starts being challenged |
-| `MAX_CONCURRENCY` | `3` | browser fetches allowed at once |
-| `FETCH_TIMEOUT_MS` | `60000` | per-page browser timeout |
-| `MAX_PAGES` | `3` | hard cap on pages per request |
-| `PAGE_DELAY_S` | `2` | pause between pages and before a retry |
-| `PORT` | `8000` | listen port |
+`API_TOKEN` is the bearer token callers must send, and is required in production. The rest tune the browser: concurrency, per-page timeout, page cap, resource blocking and an optional proxy.
+
+`SCRAPE_BUDGET_S` bounds a single call's wall clock. Past it the service returns the reviews it has already collected and sets an `X-Truncated` response header, rather than running on past the caller's own timeout holding a browser nobody is waiting for.
 
 ## Development
 
 ```bash
-uv run pytest        # 33 tests against saved __NEXT_DATA__ fixtures, no network
+uv run pytest        # 40 tests against saved __NEXT_DATA__ fixtures, no network
 ```
 
 Layout: `scraper.py` (fetch, parse, paginate, retry), `mapping.py` (output shape), `api.py` (FastAPI surface), `config.py` (env). Fixtures in `tests/fixtures/` are real page dumps; refresh them if Trustpilot changes its page structure.
 
-Measured on a residential connection: one page (20 reviews) in 13–20 s, two pages in about 36 s; roughly 60 s per page from a datacenter IP.
-
 ## Deployment
 
-Production runs as a single Docker container on a Linux VPS. The `Dockerfile` installs the stealth browser into `/opt/cache` and runs the service as a non-root user on port 8000; put a reverse proxy with TLS in front of it and set `API_TOKEN`.
+Production runs as a single Docker container on the same VPS as n8n, attached to n8n's Docker network. `docker-compose.yml` is the deployment topology. It carries the memory limits, process reaping, shutdown grace and log rotation that a bare `docker run` would not, and its comments record the measurements each limit is sized against.
 
 ```bash
-docker build -t trustpilot-reviews .
-docker run -d --restart unless-stopped -p 8000:8000 --env-file .env trustpilot-reviews
+git clone https://github.com/haider-ecombench/trustpilot-reviews-scraper.git
+cd trustpilot-reviews-scraper
+cp .env.example .env          # set API_TOKEN
+docker compose up -d --build  # first build is slow: it downloads Chromium
 ```
 
-GitHub Actions CI runs on every push to `main`: the unit tests, then a full image build that starts the container and exercises `/health`, token enforcement, a live scrape and the `404` path.
+n8n reaches the service by container name over the shared network:
+
+```
+http://trustpilot-reviews:8000/trustpilot
+```
+
+Nothing is published to the host and nothing is reachable from the internet, so there is no domain, no TLS certificate and no reverse proxy to maintain for this service. The VPS already runs Traefik on 80/443 for n8n's own UI; adding a second proxy would fail to bind. `API_TOKEN` still applies and is still worth setting, so a compromised container on the network cannot drive the scraper freely.
+
+The network is declared external in `docker-compose.yml` as `n8n_default`, the default Compose creates for n8n's project. If that name differs the container refuses to start and says so; `docker network ls` gives the real one.
+
+CI runs on pushes to `main` and on pull requests: unit tests, plus a full image build that starts the container and exercises `/health`, token enforcement, a live scrape and the `404` path.

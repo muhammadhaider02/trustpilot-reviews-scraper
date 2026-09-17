@@ -1,0 +1,77 @@
+# Production topology: one container beside n8n on the same VPS, on n8n's Docker network.
+#
+# There is no reverse proxy and no public route here. n8n reaches the API by container name
+# over the shared network (http://trustpilot-reviews:8000), so nothing is published to the host
+# and nothing is reachable from the internet. The VPS already runs Traefik on 80/443 for n8n's
+# own UI - do not add a second proxy, it would fail to bind.
+#
+# Memory model. Scrapling launches a full Chromium per fetch and tears it down again
+# (StealthyFetcher.fetch -> `with StealthySession(...)`), so usage is spiky, not cumulative:
+#   peak ~= MAX_CONCURRENCY x one browser (~400MB) + the Python process (~250MB)
+# MAX_CONCURRENCY is what keeps the app inside its budget. mem_limit below is a blast-radius
+# guard for the host: hitting it means the kernel OOM-kills the container, dropping in-flight
+# scrapes. Size MAX_CONCURRENCY so you never reach it.
+services:
+  scraper:
+    build: .
+    image: trustpilot-reviews:latest
+    container_name: trustpilot-reviews
+    restart: unless-stopped
+    env_file: .env
+
+    # No `ports:` on purpose. Publishing would expose the API on the host - and Docker
+    # publishes straight past UFW, so even 8000:8000 behind a firewall would be public.
+    # Reachable only from containers on the network below. To poke at it from the host:
+    #   docker exec trustpilot-reviews python -c "import urllib.request as u; \
+    #     print(u.urlopen('http://127.0.0.1:8000/health').read())"
+    networks:
+      - n8n
+
+    # 3g fits MAX_CONCURRENCY=3 with headroom, but this box is shared: n8n holds ~650MB and
+    # Traefik ~20MB, so budget against what is left, not total RAM. On a 4GB VPS use 2g and
+    # MAX_CONCURRENCY=2. memswap_limit == mem_limit disables swap for the container:
+    # a browser thrashing swap is slower and harder to diagnose than one that dies.
+    mem_limit: 3g
+    memswap_limit: 3g
+    mem_reservation: 1g
+
+    # Chromium forks heavily and a fetch that times out can orphan its process tree.
+    # init: true runs a real init as PID 1 so those get reaped instead of accumulating
+    # as zombies; pids_limit stops a fork storm from taking the host down with it.
+    # Observed peaks: 413 PIDs while three fetches were launching, and 146 with five browsers
+    # already running. Chromium's thread count spikes hard during launch, so size this against
+    # the launch peak, not the steady state, and leave room for a teardown overlapping the next
+    # fetch - 512 did not. Hitting the cap makes fork() return EAGAIN, which Chromium reports as
+    # an opaque "Target closed", so it reads as a scrape failure rather than a resource limit.
+    init: true
+    pids_limit: 1024
+
+    # Docker's default is 10s, which SIGKILLs every in-flight scrape on redeploy: uvicorn stops
+    # accepting and waits for the handler, and that handler is blocked on a scrape that may
+    # legitimately run for SCRAPE_BUDGET_S. 210s is that budget plus slack for Chromium teardown -
+    # at exactly 200s a scrape that used its whole budget still gets killed during cleanup, which
+    # is the failure this exists to prevent. Costs nothing when nothing is in flight; Docker stops
+    # as soon as the process exits. Raise it with SCRAPE_BUDGET_S, never below it.
+    stop_grace_period: 210s
+
+    # Scrapling already passes --disable-dev-shm-usage, so Chromium puts shared memory in
+    # /tmp on disk rather than /dev/shm. This is insurance for the paths that ignore that
+    # flag, not the main lever. Deliberately NOT a tmpfs /tmp: tmpfs pages count against
+    # mem_limit, so it would eat the browser's own budget.
+    shm_size: 256m
+
+    # Chromium is verbose. Without this the json log grows until the disk fills.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# n8n's Compose project creates this network as <project>_default. Declared external so this
+# file never creates or owns it - n8n's stack does. If the name is wrong the container refuses
+# to start with `network n8n_default declared as external, but could not be found`, which names
+# the fix; check with `docker network ls`. Nothing else is affected when it fails.
+networks:
+  n8n:
+    external: true
+    name: n8n_default
