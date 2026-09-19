@@ -7,8 +7,9 @@ A 200 may be a partial result: if the scrape hits SCRAPE_BUDGET_S it returns the
 already collected and sets `X-Truncated: true`. The body looks identical to a complete run.
 
 Error contract, matched to Stage 4's retry logic:
-  404 {"error": {...}}  brand has no Trustpilot page -> Stage 4 burns one of the brand's retries
-  400 {"error": {...}}  invalid domain               -> same, brand-side
+  200 []                brand has no Trustpilot page -> Stage 4 reads `no_results`, as it did
+                        from Apify's empty dataset; `X-No-Trustpilot-Page: true` says why
+  400 {"error": {...}}  invalid domain               -> brand-side, burns one of its retries
   503 {"error": {...}}  we were blocked / browser died -> vendor failure, no retry burned
 """
 
@@ -27,7 +28,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from . import __version__
 from .config import settings
 from .mapping import to_items
-from .scraper import TrustpilotError, scrape
+from .scraper import NoTrustpilotPage, TrustpilotError, scrape
 
 log = logging.getLogger("trustpilot_reviews.api")
 
@@ -129,8 +130,19 @@ async def trustpilot(req: ScrapeRequest):
     except ValueError as e:  # clean_domain rejected it
         counters["not_found"] += 1
         return JSONResponse(status_code=400, content=_error_body(e, 400))
+    except NoTrustpilotPage:
+        # Apify's dataset was empty for a domain with no Trustpilot page, and Stage 4 read that as
+        # `no_results`. Answering a 404 error item instead made the same brand `request_failed`,
+        # and because the message says "not found" it spent one of the brand's three retries on a
+        # page that no retry will make appear. Measured 19 Sep 2026: 5 of the 26 baseline brands.
+        # So: an empty array, with a header so the difference from "a page with no reviews in the
+        # window" is still visible to anyone reading the response.
+        counters["not_found"] += 1
+        seconds = time.time() - started
+        log.info("no page %s stars=%s %.1fs", domain, req.stars, seconds)
+        return JSONResponse(content=[], headers={"X-No-Trustpilot-Page": "true", "X-Scrape-Seconds": f"{seconds:.1f}"})
     except TrustpilotError as e:
-        key = "not_found" if e.status == 404 else "blocked" if e.status == 503 else "failed"
+        key = "blocked" if e.status == 503 else "failed"
         counters[key] += 1
         log.warning("%s %s stars=%s -> %s: %s", e.status, domain, req.stars, type(e).__name__, e)
         return JSONResponse(status_code=e.status, content=_error_body(e, e.status))

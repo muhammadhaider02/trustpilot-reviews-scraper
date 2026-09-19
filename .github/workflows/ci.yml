@@ -62,14 +62,15 @@ jobs:
           print(f'{len(d)} reviews, trust score {d[0][\"companyTrustScore\"]}, total {d[0][\"companyTotalReviews\"]}')
           "
 
-      - name: Missing brand returns 404
+      - name: Missing brand returns an empty array
         run: |
-          curl -s --max-time 240 -o err.json -w 'status=%{http_code}\n' \
+          curl -s --max-time 240 -D headers.txt -o body.json -w 'status=%{http_code}\n' \
             -X POST http://127.0.0.1:8000/trustpilot \
             -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
             -d '{"domain":"no-such-brand-zz9q.com","stars":[3]}' | tee status.txt
-          grep -q 'status=404' status.txt
-          grep -q 'not found' err.json
+          grep -q 'status=200' status.txt
+          test "$(cat body.json)" = "[]"
+          grep -qi 'x-no-trustpilot-page: true' headers.txt
 
       - name: Container logs
         if: always()

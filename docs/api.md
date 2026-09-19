@@ -11,6 +11,7 @@ One endpoint that answers the body Stage 4 sends to Apify three times per brand,
 | Query string | `?maxTotalChargeUsd=0.50&timeout=240` | none |
 | Success | JSON array, one object per review | same |
 | Failure | one object carrying `error` or `message`, no `rating` | same |
+| No Trustpilot page for the domain | empty dataset, `[]` | `[]`, plus `X-No-Trustpilot-Page: true` |
 | Node timeout | 250 s per band | unchanged; `SCRAPE_BUDGET_S` sits under it |
 
 The node options `alwaysOutputData` and `onError: continueRegularOutput` are what let an error body reach `Sort Trustpilot Reviews` instead of stopping the run. Keep both.
@@ -82,23 +83,25 @@ One object per review, newest first, company fields repeated on every row.
 | `X-Total-Available` | reviews Trustpilot reports for the band and window, before `max` |
 | `X-Trust-Score` | the company's TrustScore, empty if the page had none |
 | `X-Truncated` | `true` when `SCRAPE_BUDGET_S` stopped the call with pages left |
+| `X-No-Trustpilot-Page` | `true` when the `[]` is because Trustpilot has no page for the domain, as opposed to a page with no reviews in the window |
 
 ## Errors
 
 ```json
-{ "error": { "type": "NoTrustpilotPage", "status": 404, "message": "404 not found: no Trustpilot page at https://www.trustpilot.com/review/example.com?stars=1&stars=2&sort=recency&languages=en&date=last12months", "description": "..." } }
+{ "error": { "type": "ValueError", "status": 400, "message": "invalid domain: request must include `domain` (or `companyUrls`)", "description": "..." } }
 ```
 
 | Status | Type | When |
 |---|---|---|
 | `400` | `ValueError` | no `domain` or `companyUrls`, or a domain with no dot |
 | `401` | | missing or wrong bearer token |
-| `404` | `NoTrustpilotPage` | Trustpilot has no page for the domain |
 | `503` | `ScrapeBlocked` | challenged, or served a page without `__NEXT_DATA__`, on both attempts |
 | `503` | `ScrapeFailed` | the browser or network failed on both attempts |
 | `500` | | anything unexpected |
 
-The wording is part of the contract. Stage 4 reads any error item as `request_failed` and then decides who pays: a message matching `404`, `not found`, `no such page` or `invalid url|domain` spends one of the brand's three retries; anything else is a vendor failure that spends nothing. So the `404` and `400` messages carry those words and the `503` messages never do. One error item from any band discards all three bands' reviews for that run; that is the workflow's rule.
+The wording is part of the contract. Stage 4 reads any error item as `request_failed` and then decides who pays: a message matching `404`, `not found`, `no such page` or `invalid url|domain` spends one of the brand's three retries; anything else is a vendor failure that spends nothing. So the `400` message carries those words and the `503` messages never do. One error item from any band discards all three bands' reviews for that run; that is the workflow's rule.
+
+A domain with no Trustpilot page is **not** an error. Until 19 Sep 2026 it was a `404` whose message said `not found`, which made Stage 4 label the brand `request_failed` and spend one of its retries on a page no retry can produce. Apify returned an empty dataset for the same domains and Stage 4 read that as `no_results`, so that is what this service returns now: `200 []` with `X-No-Trustpilot-Page: true`. In the 26-brand baseline 5 brands are in this state.
 
 ## `GET /health`
 
@@ -112,7 +115,7 @@ Unauthenticated, for uptime checks and the Docker `HEALTHCHECK`.
 }
 ```
 
-Counters reset on restart. `not_found` counts `404`s and `400`s together; `blocked` is `503`; `failed` is `500`. `truncated` rising means the budget is biting, which a `200` would otherwise hide.
+Counters reset on restart. `not_found` counts missing pages (`200 []` with `X-No-Trustpilot-Page`) and `400`s together; `blocked` is `503`; `failed` is `500`. `truncated` rising means the budget is biting, which a `200` would otherwise hide.
 
 ## Command line
 

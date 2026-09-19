@@ -91,14 +91,19 @@ def test_post_accepts_apify_body_verbatim(client, monkeypatch):
     assert seen == {"domain": "gymshark.com", "stars": [1, 2], "max_reviews": 30, "months": 12}
 
 
-def test_post_404_for_missing_page(client, monkeypatch):
+def test_missing_page_is_an_empty_array_not_an_error(client, monkeypatch):
+    # Apify returned an empty dataset for a domain with no Trustpilot page and Stage 4 read that as
+    # `no_results`; a 404 error item read as `request_failed` and spent one of the brand's retries.
     def fake_scrape(*a, **k):
         raise NoTrustpilotPage("404 not found: no Trustpilot page at https://www.trustpilot.com/review/x.com")
 
     monkeypatch.setattr(api, "scrape", fake_scrape)
+    before = api.counters["not_found"]
     r = client.post("/trustpilot", json={"domain": "x.com", "stars": [1, 2]})
-    assert r.status_code == 404
-    assert "not found" in r.json()["error"]["description"]
+    assert r.status_code == 200
+    assert r.json() == []
+    assert r.headers["X-No-Trustpilot-Page"] == "true"
+    assert api.counters["not_found"] == before + 1
 
 
 def test_post_503_when_blocked(client, monkeypatch):

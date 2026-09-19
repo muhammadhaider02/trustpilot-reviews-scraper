@@ -109,4 +109,4 @@ Not applied, and not to be applied without a decision. Recorded so the shape of 
 `.github/workflows/ci.yml` runs on pushes to `main`, pull requests and manual dispatch:
 
 - **unit-tests**: `uv run pytest -q` on Python 3.11.
-- **docker-image**: builds the image, starts it with a token minted for that run only, and checks `/health`, that a missing token is `401`, a live scrape of gymshark.com (three-star band, max 5, twelve months) that must return rated reviews with a TrustScore, and that an unknown domain is a `404` whose body says `not found`. A `503` fails the build: unlike the Reddit sibling there is no allowance for being blocked, and every run since 16 Sep 2026 has passed.
+- **docker-image**: builds the image, starts it with a token minted for that run only, and checks `/health`, that a missing token is `401`, a live scrape of gymshark.com (three-star band, max 5, twelve months) that must return rated reviews with a TrustScore, and that an unknown domain is a `200` whose body is `[]` with `X-No-Trustpilot-Page: true`. A `503` fails the build: unlike the Reddit sibling there is no allowance for being blocked, and every run since 16 Sep 2026 has passed.

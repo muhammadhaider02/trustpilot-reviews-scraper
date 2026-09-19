@@ -41,8 +41,9 @@ class TrustpilotError(Exception):
 
 
 class NoTrustpilotPage(TrustpilotError):
-    """Brand has no Trustpilot profile. This is the BRAND's problem, so Stage 4 should burn a retry.
-    The message must contain '404' / 'not found' to match Stage 4's BRAND_ERROR_RE."""
+    """Brand has no Trustpilot profile. The API answers this with `200 []`, the empty dataset Apify
+    returned for the same domains, so Stage 4 reads `no_results` and spends no retry on a page that
+    no retry can produce. The message keeps '404' / 'not found' for the CLI and the logs."""
 
     status = 404
 

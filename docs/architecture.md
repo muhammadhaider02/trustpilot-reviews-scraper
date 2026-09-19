@@ -24,8 +24,8 @@ Then `Parse Report` decides whether a failure costs the brand a retry. A `reques
 Three consequences for this code:
 
 1. `companyUrl` is built from Trustpilot's own `identifyingName`, so it is the value the guard expects, and `includeCompanyInfo` should stay `true`. Turning it off removes every `company*` field, which both blinds the guard and drops the TrustScore.
-2. A failure is one object with `error.description` and `error.message`, never an empty array. Stage 4 reads the description first.
-3. Message wording is part of the contract. A missing page says `404 not found`; a bad domain says `invalid domain`; blocked and crashed fetches say neither, and never `no such page` or `invalid url`. `tests/test_scraper.py` pins this.
+2. A failure is one object with `error.description` and `error.message`, never an empty array. Stage 4 reads the description first. A domain with **no Trustpilot page** is not a failure: it is `200 []` (with `X-No-Trustpilot-Page: true`), because that is what Apify's empty dataset looked like and Stage 4 reads it as `no_results`. Answering a `404` there made the brand `request_failed` and spent a retry on a page no retry can produce; 5 of the 26 baseline brands are in that state.
+3. Message wording is part of the contract. A bad domain says `invalid domain`; blocked and crashed fetches say neither `404`, `not found`, `no such page` nor `invalid url`. `tests/test_scraper.py` pins this.
 
 ## How a page is read
 
@@ -63,7 +63,7 @@ No proxy is configured in production (`/health` reports `proxy: false`). `SCRAPE
 | Status | Type | Cause |
 |---|---|---|
 | `400` | `ValueError` | no domain in the body, or a domain with no dot after stripping scheme, `www.` and path |
-| `404` | `NoTrustpilotPage` | Trustpilot answered `404` for `/review/<domain>` |
+| `200 []` | `NoTrustpilotPage` | Trustpilot answered `404` for `/review/<domain>`; the API turns it into an empty array with `X-No-Trustpilot-Page: true` |
 | `503` | `ScrapeBlocked` | challenged or served a non-review page on both attempts |
 | `503` | `ScrapeFailed` | Chromium or the network failed on both attempts |
 
