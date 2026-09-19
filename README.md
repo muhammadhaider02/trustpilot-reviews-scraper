@@ -4,6 +4,7 @@
 
 **FETCH. PARSE. SERVE.**
 
+[![CI](https://github.com/haider-ecombench/trustpilot-reviews-scraper/actions/workflows/ci.yml/badge.svg)](https://github.com/haider-ecombench/trustpilot-reviews-scraper/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![uv](https://img.shields.io/badge/uv-Package_Manager-DE5FE9?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -11,15 +12,15 @@
 
 Self-hosted Trustpilot review scraper with an HTTP API.
 
+[Architecture](docs/architecture.md) · [API](docs/api.md) · [Deployment](docs/deployment.md)
+
 </div>
 
 ---
 
 ## Platform
 
-This repo is a standalone review-collection service. Given a brand domain it fetches that brand's Trustpilot page with a stealth browser, reads the structured `__NEXT_DATA__` JSON the page embeds (reviews, pagination, TrustScore, review count), and serves the result over a small authenticated HTTP API that automation workflows call like any other data service.
-
-A real browser is required: Trustpilot sits behind a CloudFront bot challenge that rejects every plain HTTP client, including TLS-impersonating ones.
+This repo is a standalone review-collection service behind the SmartLead brand-research pipeline, running over its own HTTP API. It is the sibling of `reddit-reviews`, which serves Reddit the same way, and both stand in for the Apify actors the pipeline used to call.
 
 ## Quickstart
 
@@ -29,59 +30,30 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Runs as a single Fas
 git clone https://github.com/haider-ecombench/trustpilot-reviews-scraper.git
 cd trustpilot-reviews-scraper
 
-uv sync                       # dependencies into a uv-managed venv
-uv run scrapling install      # stealth browser (once)
+uv sync                               # dependencies into a uv-managed venv
+uv run scrapling install              # stealth browser for page scraping (once)
 
-cp .env.example .env          # then set API_TOKEN (see Configuration)
+cp .env.example .env                  # then set API_TOKEN (see Configuration)
 
-uv run trustpilot-reviews serve                    # HTTP service on :8000
+uv run trustpilot-reviews serve       # HTTP service on :8000
 ```
 
 Verify with `curl localhost:8000/health` (expects `"status":"ok"`); interactive API docs are at `/docs`.
 
-The service is driven over its HTTP API: `POST /trustpilot` takes a brand domain with `Authorization: Bearer <API_TOKEN>` and returns that brand's reviews newest first, while `GET /health` is unauthenticated and returns request counters. See `/docs` for the request fields, the response shape and the error contract.
-
-One-off scrapes from the command line, no server needed:
-
-```bash
-uv run trustpilot-reviews scrape gymshark.com --stars 1,2 --max 20 --pretty
-```
+The service is driven over its HTTP API: one brand domain and a star band in, that brand's newest reviews out, in the Apify actor's request and response shape. See [api.md](docs/api.md) for the endpoint, auth (`Authorization: Bearer`) and the error contract.
 
 ## Configuration
 
-All configuration is environment variables in `.env`. **`.env.example` is the canonical list.** Copy it and fill it in; every variable is documented there alongside the measurement its default is based on.
+All configuration is environment variables in `.env`. **`.env.example` is the canonical list.** Copy it and fill it in; the full reference with defaults lives in [architecture.md](docs/architecture.md#configuration-environment-variables).
 
-`API_TOKEN` is the bearer token callers must send, and is required in production. The rest tune the browser: concurrency, per-page timeout, page cap, resource blocking and an optional proxy.
-
-`SCRAPE_BUDGET_S` bounds a single call's wall clock. Past it the service returns the reviews it has already collected and sets an `X-Truncated` response header, rather than running on past the caller's own timeout holding a browser nobody is waiting for.
+The only required value is the API bearer token. The rest tune the browser, the per-call budget and an optional proxy.
 
 ## Development
 
 ```bash
-uv run pytest        # 40 tests against saved __NEXT_DATA__ fixtures, no network
+uv run pytest            # 40 tests against saved __NEXT_DATA__ fixtures, no network
 ```
-
-Layout: `scraper.py` (fetch, parse, paginate, retry), `mapping.py` (output shape), `api.py` (FastAPI surface), `config.py` (env). Fixtures in `tests/fixtures/` are real page dumps; refresh them if Trustpilot changes its page structure.
 
 ## Deployment
 
-Production runs as a single Docker container on the same VPS as n8n, attached to n8n's Docker network. `docker-compose.yml` is the deployment topology. It carries the memory limits, process reaping, shutdown grace and log rotation that a bare `docker run` would not, and its comments record the measurements each limit is sized against.
-
-```bash
-git clone https://github.com/haider-ecombench/trustpilot-reviews-scraper.git
-cd trustpilot-reviews-scraper
-cp .env.example .env          # set API_TOKEN
-docker compose up -d --build  # first build is slow: it downloads Chromium
-```
-
-n8n reaches the service by container name over the shared network:
-
-```
-http://trustpilot-reviews:8000/trustpilot
-```
-
-Nothing is published to the host and nothing is reachable from the internet, so there is no domain, no TLS certificate and no reverse proxy to maintain for this service. The VPS already runs Traefik on 80/443 for n8n's own UI; adding a second proxy would fail to bind. `API_TOKEN` still applies and is still worth setting, so a compromised container on the network cannot drive the scraper freely.
-
-The network is declared external in `docker-compose.yml` as `n8n_default`, the default Compose creates for n8n's project. If that name differs the container refuses to start and says so; `docker network ls` gives the real one.
-
-CI runs on pushes to `main` and on pull requests: unit tests, plus a full image build that starts the container and exercises `/health`, token enforcement, a live scrape and the `404` path.
+Production runs as a single Docker container on the Hostinger VPS that hosts n8n, attached to n8n's Docker network, with nothing published to the host. Deploys are a `git pull` and `docker compose up -d --build`; CI runs on push to `main`. The operational runbook (topology, env, checks and gotchas) is in [deployment.md](docs/deployment.md).

@@ -1,0 +1,116 @@
+# Architecture
+
+## What it replaces
+
+Stage 4 of the SmartLead pipeline (`SmartLead | Stage 4 - Brand Research Bundle`, `u3698BQra0i9oK4b`) calls the Apify actor `automation-lab~trustpilot` three times per brand, in parallel, one call per star band:
+
+| Node | `stars` | Query string | Node timeout |
+|---|---|---|---|
+| `Apify: Trustpilot 1 Star` | `["1", "2"]` | `maxTotalChargeUsd=0.50&timeout=240` | 250 s |
+| `Apify: Trustpilot Mid` | `["3"]` | same | 250 s |
+| `Apify: Trustpilot Positive` | `["4", "5"]` | same | 250 s |
+
+The three responses go through `Merge Trustpilot Bands` (append, three inputs) into `Sort Trustpilot Reviews`. Banding at the source is what guarantees a mix of sentiment: the workflow's own note records that one recency-sorted call gave 51 negative, 0 mid and 5 positive reviews (execution 536). This service therefore answers one band per call and never tries to balance anything itself.
+
+What `Sort Trustpilot Reviews` does with the rows decides what this service has to return:
+
+- An **error item** is any object carrying `error` or `message` with no `rating` and no `text`. One error item from any band marks the whole Trustpilot step `request_failed` and keeps nothing, even when the other two bands succeeded. That is Stage 4's rule, not this service's, but it means a single `503` costs the brand all three bands.
+- **Identity** is read from the company URL, not the company name: the slug of `companyUrl` (`/review/<slug>`), plus `companyDomain` and `companyWebsite`, must contain the brand's domain or its stem. The note on that guard records the bug it fixed: comparing the name "ANINE BING" to the domain "aninebing" could never match (execution 523). A row with none of those fields passes the guard unchecked.
+- **Stats** come from the first row that carries `companyTrustScore` or `companyTotalReviews`. The TrustScore sets the sentiment label; without it the label is inferred from the sample, which the workflow treats as a weaker basis.
+- Text is `text`, rating is `rating`, dedup is on `reviewId`; reviews under 8 words or older than 1,095 days by `publishedDate` are dropped; up to 25 per band are kept, newest first. Outcomes: `request_failed`, `no_results`, `all_irrelevant`, `thin` (fewer than 6 kept), `ok`.
+
+Then `Parse Report` decides whether a failure costs the brand a retry. A `request_failed` outcome is a **vendor failure** (no retry spent, brand picked up again next hour) unless the error text matches the brand pattern `\b404\b|not found|no such (company|business|page)|invalid (url|domain)`, in which case it is the **brand's** failure and one of its three tries is spent. That rule exists because of 6 Sep 2026: between 12:20 and 15:20 UTC Apify hit its monthly hard limit, every Trustpilot call came back `403 Monthly usage hard limit exceeded`, and Stage 4 permanently abandoned five brands that were never the problem. It is also why this service exists: it has no monthly limit to hit.
+
+Three consequences for this code:
+
+1. `companyUrl` is built from Trustpilot's own `identifyingName`, so it is the value the guard expects, and `includeCompanyInfo` should stay `true`. Turning it off removes every `company*` field, which both blinds the guard and drops the TrustScore.
+2. A failure is one object with `error.description` and `error.message`, never an empty array. Stage 4 reads the description first.
+3. Message wording is part of the contract. A missing page says `404 not found`; a bad domain says `invalid domain`; blocked and crashed fetches say neither, and never `no such page` or `invalid url`. `tests/test_scraper.py` pins this.
+
+## How a page is read
+
+Trustpilot is a Next.js site. Every review page embeds a `<script id="__NEXT_DATA__">` block holding the same structured data the page renders: `props.pageProps.reviews`, `businessUnit` (display name, identifying name, TrustScore, review counts, website, claimed and closed flags) and `filters.pagination`. The scraper reads that block with a regex and `json.loads`, never a CSS selector. The two fixtures under `tests/fixtures/` are real dumps of the gymshark.com and ctsounds.com negative-band pages from 16 Sep 2026.
+
+The URL is Trustpilot's own filter form:
+
+```
+https://www.trustpilot.com/review/<domain>?stars=1&stars=2&sort=recency&languages=en&date=last12months&page=2
+```
+
+Trustpilot offers four fixed windows (`last30days`, `last3months`, `last6months`, `last12months`); a requested month count maps to the smallest window that covers it, and anything over 12 means all time. Because the sort is by recency, the scraper also stops at the first review older than the requested months, so a `date` window that is wider than the request never over-fetches.
+
+A page is 20 reviews. `max` is accepted up to 100 but `MAX_PAGES` (3) caps a call at 60. Stage 4 asks for 30 per band, so a brand is at most six pages. Reviews are de-duplicated on id across pages, and a row whose rating is outside the requested band is dropped even though the server-side filter has always held.
+
+## Why a browser
+
+Trustpilot sits behind a CloudFront JavaScript challenge that rejects plain HTTP clients, including TLS-impersonating ones. Pages are fetched with Scrapling's `StealthyFetcher`, a headless Chromium. Every fetch launches a browser and tears it down again; there is no shared session.
+
+Two arguments are load-bearing and recorded in `fetch_html`:
+
+| Argument | Value | Why |
+|---|---|---|
+| `network_idle` | `True` | measured 16 Sep 2026: off returned in ~6 s with 5 of 5 `HTTP 403`; on returned 5 of 5 `HTTP 200` on the same calls. The wait is what lets the challenge complete. |
+| `retries` | `1` | Scrapling's default is 3, which multiplies with `fetch_page`'s 2 attempts and the 3-page loop: 18 navigations for one request, about 560 s worst case. The one retry that can tell a challenge from a dead browser lives in `fetch_page`. |
+
+`disable_resources` blocks images, fonts, CSS and media, which is the largest memory lever because only the HTML document is read. `solve_cloudflare` is off: the challenge is CloudFront, not Cloudflare. `humanize`, `os_randomize` and `geoip` were removed on 17 Sep 2026: they are Camoufox-era arguments that Scrapling 0.4.15 silently ignores, so they read as active stealth while doing nothing.
+
+No proxy is configured in production (`/health` reports `proxy: false`). `SCRAPER_PROXY` is a URL handed straight to Scrapling for the day the VPS address starts being challenged; unlike the Reddit sibling there is no port pool here, because nothing has needed one.
+
+## Retries and the error ladder
+
+`fetch_page` makes two attempts per page with `PAGE_DELAY_S` between them, and retries on three things: the browser died (`ScrapeFailed`), a non-200 status (`ScrapeBlocked`, carrying the page title), or a 200 without `__NEXT_DATA__` (`ScrapeBlocked`, the challenge interstitial). It never retries a `404`; that is `NoTrustpilotPage` at once.
+
+| Status | Type | Cause |
+|---|---|---|
+| `400` | `ValueError` | no domain in the body, or a domain with no dot after stripping scheme, `www.` and path |
+| `404` | `NoTrustpilotPage` | Trustpilot answered `404` for `/review/<domain>` |
+| `503` | `ScrapeBlocked` | challenged or served a non-review page on both attempts |
+| `503` | `ScrapeFailed` | Chromium or the network failed on both attempts |
+
+## The time budget
+
+The numbers only make sense together, and `.env.example` carries the arithmetic:
+
+| | |
+|---|---|
+| one fetch | `FETCH_TIMEOUT_MS` = 30 s (observed ~32 s) |
+| one page | 2 attempts × 30 s + `PAGE_DELAY_S` = 62 s |
+| one call | 3 pages × 62 s + 2 × 2 s = 190 s |
+| Stage 4 node timeout | 250 s |
+
+`FETCH_TIMEOUT_MS` caps dead time, not headroom. A minority of pages never reach network idle and wait out the whole timeout with complete data already in hand, so raising it makes the worst case worse. At 20,000 every call still returned a full 20 reviews; 30,000 leaves margin.
+
+`SCRAPE_BUDGET_S` (200) is what protects the workflow. Nothing cancels a request once it starts: Starlette does not cancel a handler when the client disconnects, and the browser runs in a thread that cannot be cancelled, so a caller that gives up does not free the browser. Before each page after the first the scraper checks that a whole page's worst case still fits before the deadline; if not it returns what it has with `X-Truncated: true` and counts it. Page 1 is never skipped. `stop_grace_period` in `docker-compose.yml` is 210 s so a redeploy cannot kill a scrape mid-budget.
+
+## Memory and concurrency
+
+Usage is spiky, not cumulative: one Chromium per fetch at about 430 MiB, torn down after, plus about 250 MB for the Python process. Three concurrent fetches peaked at 994 MiB against the 3 GiB cap. PIDs peaked at 413 while three browsers were launching and 146 with five already running; a cap of 512 was not enough, and hitting it surfaces as an opaque `Target closed`, so the cap is 1,024.
+
+`MAX_CONCURRENCY` (3) is an `asyncio.Semaphore` sized to Stage 4's three band calls for one brand. A second brand overlapping the first queues. Measured on 17 Sep 2026 through the `scraper-testing` workflow, six calls fired together (two brands, three bands each): three finished in 12 to 33 s, the other three waited for a permit and finished in 43 to 65 s, and all six returned 20 reviews.
+
+## Layout
+
+| File | Role |
+|---|---|
+| `src/trustpilot_reviews/scraper.py` | URL building, `__NEXT_DATA__` parsing, the browser fetch, retry and the page loop with the budget |
+| `src/trustpilot_reviews/mapping.py` | turns parsed reviews into the Apify row shape Stage 4 reads |
+| `src/trustpilot_reviews/api.py` | FastAPI surface: request aliases, bearer check, error bodies, headers, counters |
+| `src/trustpilot_reviews/config.py` | environment variables, read once |
+| `src/trustpilot_reviews/__init__.py` | the `trustpilot-reviews` CLI (`serve`, `scrape`) |
+| `tests/` | 40 tests against the saved fixtures; no network |
+
+## Configuration (environment variables)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `API_TOKEN` | *(empty)* | bearer token callers must send; empty disables auth, for local testing only |
+| `SCRAPER_PROXY` | *(empty)* | proxy URL (`http://user:pass@host:port`) passed to the browser |
+| `MAX_CONCURRENCY` | `3` | browser fetches in flight; raise `mem_limit` with it |
+| `FETCH_TIMEOUT_MS` | `30000` | per-page browser timeout; caps dead time, see above |
+| `BLOCK_RESOURCES` | `true` | block images, fonts, CSS and media in the browser |
+| `MAX_PAGES` | `3` | pages per call, 20 reviews each |
+| `SCRAPE_BUDGET_S` | `200` | wall-clock ceiling per call; must stay under Stage 4's 250 s |
+| `PAGE_DELAY_S` | `2` | pause between pages and before a retry |
+| `SOLVE_CLOUDFLARE` | `false` | Scrapling's Cloudflare solver; not needed for CloudFront |
+| `HOST` | `0.0.0.0` | bind address |
+| `PORT` | `8000` | bind port |
