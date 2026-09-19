@@ -247,12 +247,20 @@ def fetch_html(url: str) -> tuple[int, str]:
         page = StealthyFetcher.fetch(
             url,
             headless=True,
-            # Load-bearing: this wait is what lets the CloudFront JS challenge complete.
-            # Measured 2026-09-16 - turning it off returned in ~6s with 5/5 HTTP 403; turning it
-            # back on returned 5/5 HTTP 200 on the same calls. It costs the full FETCH_TIMEOUT_MS
-            # on the minority of pages whose background traffic never settles, so cap that timeout
-            # rather than removing this.
-            network_idle=True,
+            # Load-bearing: the CloudFront JS challenge only clears if the browser is given time to
+            # run the page's JS. Measured 2026-09-16 and again 2026-09-19 from the VPS: returning
+            # straight after `load` gives HTTP 403 in ~1.2s on every page. Until 2026-09-19 that time
+            # came from network_idle=True, which was the wrong wait: Trustpilot keeps background
+            # requests open, so Scrapling's networkidle wait timed out (silently, at FETCH_TIMEOUT_MS)
+            # on 49 of 78 fetches in one harness run, each holding a page whose __NEXT_DATA__ had
+            # been in hand for 25s. Measured on the same four pages: network_idle 31.4/31.5/31.6s
+            # (404 page 31.3s); this selector wait 4.7/5.0/5.0s (404 page 3.6s), all with the blob
+            # present. The selector is the thing we parse, so the fetch returns the moment it exists
+            # and a challenge page, which lacks it, keeps the browser waiting until the real document
+            # lands. FETCH_TIMEOUT_MS is now only the ceiling for a page that never yields it.
+            network_idle=False,
+            wait_selector="script#__NEXT_DATA__",
+            wait_selector_state="attached",
             disable_resources=settings.block_resources,
             solve_cloudflare=settings.solve_cloudflare,
             block_webrtc=True,

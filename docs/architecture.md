@@ -49,7 +49,8 @@ Two arguments are load-bearing and recorded in `fetch_html`:
 
 | Argument | Value | Why |
 |---|---|---|
-| `network_idle` | `True` | measured 16 Sep 2026: off returned in ~6 s with 5 of 5 `HTTP 403`; on returned 5 of 5 `HTTP 200` on the same calls. The wait is what lets the challenge complete. |
+| `wait_selector` | `script#__NEXT_DATA__`, state `attached` | the challenge clears only if the browser is given time to run the page's JS: returning straight after `load` is `HTTP 403` in ~1.2 s on every page (measured 16 Sep 2026 and again 19 Sep from the VPS). Waiting for the blob that is parsed gives that time and returns the moment it exists: 4.7 / 5.0 / 5.0 s on three review pages, 3.6 s on a 404 page, blob present on all four. |
+| `network_idle` | `False` | this was the wait until 19 Sep 2026 and it was the wrong one. Trustpilot keeps background requests open, so Scrapling's networkidle wait timed out silently at `FETCH_TIMEOUT_MS` on 49 of 78 fetches in one harness run: 31.4 s per call with the data in hand after 5 s, which made a three-band brand cost ~71 s. Same four pages under it: 31.4 / 31.5 / 31.6 s and 31.3 s. |
 | `retries` | `1` | Scrapling's default is 3, which multiplies with `fetch_page`'s 2 attempts and the 3-page loop: 18 navigations for one request, about 560 s worst case. The one retry that can tell a challenge from a dead browser lives in `fetch_page`. |
 
 `disable_resources` blocks images, fonts, CSS and media, which is the largest memory lever because only the HTML document is read. `solve_cloudflare` is off: the challenge is CloudFront, not Cloudflare. `humanize`, `os_randomize` and `geoip` were removed on 17 Sep 2026: they are Camoufox-era arguments that Scrapling 0.4.15 silently ignores, so they read as active stealth while doing nothing.
@@ -78,7 +79,7 @@ The numbers only make sense together, and `.env.example` carries the arithmetic:
 | one call | 3 pages × 62 s + 2 × 2 s = 190 s |
 | Stage 4 node timeout | 250 s |
 
-`FETCH_TIMEOUT_MS` caps dead time, not headroom. A minority of pages never reach network idle and wait out the whole timeout with complete data already in hand, so raising it makes the worst case worse. At 20,000 every call still returned a full 20 reviews; 30,000 leaves margin.
+`FETCH_TIMEOUT_MS` caps dead time, not headroom. Since 19 Sep 2026 a fetch returns as soon as `__NEXT_DATA__` is attached, ~5 s, so this timeout is only reached by a page that never yields it (a challenge that does not clear), and that page then goes through `fetch_page`'s retry as `ScrapeBlocked`. Raising it makes that worst case worse and nothing else better. At 20,000 every call still returned a full 20 reviews; 30,000 leaves margin.
 
 `SCRAPE_BUDGET_S` (200) is what protects the workflow. Nothing cancels a request once it starts: Starlette does not cancel a handler when the client disconnects, and the browser runs in a thread that cannot be cancelled, so a caller that gives up does not free the browser. Before each page after the first the scraper checks that a whole page's worst case still fits before the deadline; if not it returns what it has with `X-Truncated: true` and counts it. Page 1 is never skipped. `stop_grace_period` in `docker-compose.yml` is 210 s so a redeploy cannot kill a scrape mid-budget.
 

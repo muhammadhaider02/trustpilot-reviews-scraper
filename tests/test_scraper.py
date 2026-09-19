@@ -318,3 +318,8 @@ def test_fetch_html_pins_the_scrapling_kwargs(monkeypatch):
     # Camoufox-era names that scrapling 0.4.x swallows silently - they must not drift back in.
     assert not {"humanize", "os_randomize", "geoip"} & set(seen)
     assert seen["block_webrtc"] is True, "this one is real, unlike the three above"
+    # The fetch returns when the blob we parse exists. network_idle=True waited out the whole
+    # FETCH_TIMEOUT_MS on most Trustpilot pages (31s instead of 5s) with the data already in hand.
+    assert seen["network_idle"] is False
+    assert seen["wait_selector"] == "script#__NEXT_DATA__"
+    assert seen["wait_selector_state"] == "attached"
