@@ -58,7 +58,20 @@ class ScrapeRequest(BaseModel):
     company_urls: list[str] | None = Field(default=None, validation_alias=AliasChoices("companyUrls", "company_urls"))
     stars: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
     max_reviews: int = Field(default=20, ge=1, le=100, validation_alias=AliasChoices("max", "maxReviewsPerCompany", "max_reviews"))
-    months: int | None = Field(default=12, validation_alias=AliasChoices("months", "date"))
+    months: int | None = Field(default=None, ge=1)
+    # Apify's `date` preset is accepted and IGNORED, on purpose. Until 21 Sep 2026 `last12months`
+    # became months=12, applied as Trustpilot's own window and as a cut-off. That was faithful to
+    # the field and unfaithful to the actor: its stored output for the same body is the all-time
+    # set. Measured against Trustpilot's own counts on 21 Sep 2026 -
+    #   lemieuxproducts.com  14 reviews, 0 in the last 12 months; Apify total 14, kept 8 (the 8 of
+    #                        14 that are under 3 years old, which is the workflow's own filter)
+    #   prxperformance.com   3 reviews, 0 in the window; Apify total 3, kept 2 (the 2 under 3 years)
+    #   sinopetech.com       1 review from 2021, 0 in the window; Apify score 3.2, all_irrelevant
+    #   grip6.com            7287 reviews, 2 in the window; Apify kept 11
+    # so with the window honoured those four brands returned 0 / 0 / 0 / 2 rows against a baseline
+    # that had reviews for all of them. Age is the workflow's job (1,095 days on `publishedDate`),
+    # and an explicit integer `months` still works for anyone who wants a window.
+    date: str | None = None
     include_company_info: bool = Field(default=True, validation_alias=AliasChoices("includeCompanyInfo", "include_company_info"))
 
     @field_validator("stars", mode="before")
@@ -77,20 +90,6 @@ class ScrapeRequest(BaseModel):
             if 1 <= n <= 5:
                 out.append(n)
         return out or [1, 2, 3, 4, 5]
-
-    @field_validator("months", mode="before")
-    @classmethod
-    def _coerce_months(cls, v):
-        # Apify took a `date` string like "last12months"; map that back to a month count.
-        if isinstance(v, str):
-            table = {"last30days": 1, "last3months": 3, "last6months": 6, "last12months": 12, "all": None, "": None}
-            if v in table:
-                return table[v]
-            try:
-                return int(v)
-            except ValueError:
-                return 12
-        return v
 
     def target_domain(self) -> str:
         if self.domain:

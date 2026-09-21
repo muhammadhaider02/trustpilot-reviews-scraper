@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> None:
     scrape_p.add_argument("domain")
     scrape_p.add_argument("--stars", default="1,2,3,4,5", help="comma-separated star ratings, e.g. 1,2")
     scrape_p.add_argument("--max", type=int, default=20)
-    scrape_p.add_argument("--months", type=int, default=12)
+    scrape_p.add_argument("--months", type=int, default=None, help="only reviews from the last N months; default all time, as the API")
     scrape_p.add_argument("--pretty", action="store_true")
     scrape_p.set_defaults(func=_cmd_scrape)
 

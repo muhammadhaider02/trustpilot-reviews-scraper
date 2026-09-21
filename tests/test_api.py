@@ -88,7 +88,23 @@ def test_post_accepts_apify_body_verbatim(client, monkeypatch):
     body = {"companyUrls": ["gymshark.com"], "stars": ["1", "2"], "maxReviewsPerCompany": 30, "sort": "recency", "date": "last12months", "includeCompanyInfo": True}
     r = client.post("/trustpilot", json=body)
     assert r.status_code == 200
-    assert seen == {"domain": "gymshark.com", "stars": [1, 2], "max_reviews": 30, "months": 12}
+    # `date` is ignored: Apify's output for this body is the all-time set (lemieuxproducts.com
+    # has 0 reviews in the last 12 months and Apify returned all 14), so months must be None.
+    assert seen == {"domain": "gymshark.com", "stars": [1, 2], "max_reviews": 30, "months": None}
+
+
+def test_native_months_is_still_honoured(client, monkeypatch):
+    seen = {}
+
+    def fake_scrape(domain, stars, max_reviews, months):
+        seen["months"] = months
+        return canned_result(domain)
+
+    monkeypatch.setattr(api, "scrape", fake_scrape)
+    assert client.post("/trustpilot", json={"domain": "gymshark.com", "months": 6}).status_code == 200
+    assert seen["months"] == 6
+    assert client.post("/trustpilot", json={"domain": "gymshark.com"}).status_code == 200
+    assert seen["months"] is None
 
 
 def test_missing_page_is_an_empty_array_not_an_error(client, monkeypatch):

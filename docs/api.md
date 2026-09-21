@@ -31,12 +31,12 @@ Sent verbatim by each of the three band nodes; only `stars` differs (`["1", "2"]
 }
 ```
 
-Honoured: `companyUrls` (first entry only), `stars`, `maxReviewsPerCompany`, `date`, `includeCompanyInfo`. `sort` is accepted and ignored: the service always sorts by recency, because the date cut-off depends on it.
+Honoured: `companyUrls` (first entry only), `stars`, `maxReviewsPerCompany`, `includeCompanyInfo`. `sort` is accepted and ignored: the service always sorts by recency. `date` is accepted and ignored too, since 21 Sep 2026, because that is what the actor's output does with it (next section).
 
 ### Where the service differs from the actor
 
 - One company per call. Only the first entry of `companyUrls` is read; the workflow sends exactly one.
-- `date` is mapped to a month count and applied twice: as Trustpilot's own filter window, and as a cut-off on `publishedDate` so nothing older than the requested months is returned even when the window is wider.
+- `date` is ignored. Until 21 Sep 2026 `last12months` was applied as Trustpilot's own window and as a `publishedDate` cut-off, and that lost four of the 26 baseline brands: lemieuxproducts.com has 14 reviews and 0 in the last 12 months, and Apify's stored output for the same body has all 14 (8 kept after the workflow's 3-year filter); prxperformance.com 3 and 0 (Apify kept 2); sinopetech.com 1 review from 2021 (Apify: score 3.2, `all_irrelevant`); grip6.com 7,287 and 2 in the window (Apify kept 11). Whatever the actor does with the field internally, its output is the all-time set sorted by recency, and the workflow applies its own 1,095-day cut-off. An integer `months` in the native shape still applies a window.
 - Reviews are de-duplicated on id across pages before they are returned.
 - A partial result is a `200`. If the time budget stops the scrape before `max`, the reviews already collected are returned and `X-Truncated: true` is set; the body looks identical to a complete run.
 
@@ -50,7 +50,8 @@ Honoured: `companyUrls` (first entry only), `stars`, `maxReviewsPerCompany`, `da
 | `companyUrls` | `company_urls` | | list; used when `domain` is absent, first entry only |
 | `stars` | | `[1,2,3,4,5]` | list or comma-separated string; numbers or strings; entries outside 1–5 dropped; nothing valid means all five |
 | `max` | `maxReviewsPerCompany`, `max_reviews` | `20` | 1–100, then capped by `MAX_PAGES` × 20 |
-| `months` | `date` | `12` | integer, or an Apify window: `last30days` 1, `last3months` 3, `last6months` 6, `last12months` 12, `all` none; an unrecognised string falls back to 12 |
+| `months` | | none (all time) | integer; only reviews published in the last N months, as Trustpilot's smallest covering window plus a `publishedDate` cut-off |
+| `date` | | | accepted and ignored: Apify's presets did not narrow its output, so honouring them here broke parity (see above) |
 | `includeCompanyInfo` | `include_company_info` | `true` | `false` drops every `company*` field; Stage 4's wrong-company guard and TrustScore need them, so leave it on |
 
 ## Response rows

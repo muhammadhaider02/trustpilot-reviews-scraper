@@ -37,7 +37,7 @@ The URL is Trustpilot's own filter form:
 https://www.trustpilot.com/review/<domain>?stars=1&stars=2&sort=recency&languages=en&date=last12months&page=2
 ```
 
-Trustpilot offers four fixed windows (`last30days`, `last3months`, `last6months`, `last12months`); a requested month count maps to the smallest window that covers it, and anything over 12 means all time. Because the sort is by recency, the scraper also stops at the first review older than the requested months, so a `date` window that is wider than the request never over-fetches.
+Trustpilot offers four fixed windows (`last30days`, `last3months`, `last6months`, `last12months`); a requested month count maps to the smallest window that covers it, and anything over 12 means all time. Because the sort is by recency, the scraper also stops at the first review older than the requested months, so a `date` window that is wider than the request never over-fetches. Production sends no month count: the API ignores Apify's `date` preset (since 21 Sep 2026; `docs/api.md` has the four brands and the counts that showed the actor's output is the all-time set) and the workflow applies its own 1,095-day cut-off, so the `date=` parameter above is absent on a Stage 4 call and a band is the 30 most recent reviews in that band, whatever their age.
 
 A page is 20 reviews. `max` is accepted up to 100 but `MAX_PAGES` (3) caps a call at 60. Stage 4 asks for 30 per band, so a brand is at most six pages. Reviews are de-duplicated on id across pages, and a row whose rating is outside the requested band is dropped even though the server-side filter has always held.
 

@@ -77,7 +77,7 @@ The production workflow is not edited. Changes are exercised in the n8n workflow
 | Node | What it does |
 |---|---|
 | `Scraper Health` | `GET http://trustpilot-reviews:8000/health` over the network, which is the only place that address resolves |
-| `Scrape Brand` | one band call with the Apify body verbatim (`nobltravel.com`, stars 1–2, max 20, months 12), 240 s timeout, the `trustpilot-scraper` credential |
+| `Scrape Brand` | one band call with the Apify body verbatim (`nobltravel.com`, stars 1–2, max 20, `date` present and ignored), 240 s timeout, the `trustpilot-scraper` credential |
 | `Three Bands` → `Scrape Band` | two brands × three bands as one batch of six with no interval, which is what Stage 4 produces when one brand starts before the previous one finishes; this is the `MAX_CONCURRENCY` and memory test |
 
 The last six-call run on 17 Sep 2026 returned 20 reviews on every call; three ran at once and three queued behind the semaphore, worst case 65 s.
