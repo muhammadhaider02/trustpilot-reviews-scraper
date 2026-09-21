@@ -61,16 +61,21 @@ class ScrapeRequest(BaseModel):
     months: int | None = Field(default=None, ge=1)
     # Apify's `date` preset is accepted and IGNORED, on purpose. Until 21 Sep 2026 `last12months`
     # became months=12, applied as Trustpilot's own window and as a cut-off. That was faithful to
-    # the field and unfaithful to the actor: its stored output for the same body is the all-time
-    # set. Measured against Trustpilot's own counts on 21 Sep 2026 -
+    # the field and unfaithful to the actor's output, which is not windowed consistently. Measured
+    # against Trustpilot's own counts on 21 Sep 2026 -
     #   lemieuxproducts.com  14 reviews, 0 in the last 12 months; Apify total 14, kept 8 (the 8 of
     #                        14 that are under 3 years old, which is the workflow's own filter)
     #   prxperformance.com   3 reviews, 0 in the window; Apify total 3, kept 2 (the 2 under 3 years)
     #   sinopetech.com       1 review from 2021, 0 in the window; Apify score 3.2, all_irrelevant
-    #   grip6.com            7287 reviews, 2 in the window; Apify kept 11
-    # so with the window honoured those four brands returned 0 / 0 / 0 / 2 rows against a baseline
-    # that had reviews for all of them. Age is the workflow's job (1,095 days on `publishedDate`),
-    # and an explicit integer `months` still works for anyone who wants a window.
+    #   grip6.com            7287 reviews, 2 in the window; Apify kept 11 = exactly the 11 under
+    #                        3 years, and no 12-month window at any date holds more than 5 of them
+    #   lemieux.com          37 reviews, 24 in the window; Apify kept 21 = the window, all-time is 32
+    #   selkirk.com          584 reviews; Apify kept 29 = the window, all-time is 42
+    # So honouring the window returned 0 / 0 / 0 / 2 rows for the first four against a baseline
+    # that had reviews for all of them, while the last two say the actor did window sometimes.
+    # No single rule reproduces both; ignoring the window is the one that is never below the
+    # baseline, and age is the workflow's job anyway (1,095 days on `publishedDate`). An explicit
+    # integer `months` still works for anyone who wants a window.
     date: str | None = None
     include_company_info: bool = Field(default=True, validation_alias=AliasChoices("includeCompanyInfo", "include_company_info"))
 
