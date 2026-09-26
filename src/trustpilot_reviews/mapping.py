@@ -1,4 +1,4 @@
-"""Shape scraped reviews the way Stage 4's `Sort Trustpilot Reviews` node already reads Apify items.
+"""Shape scraped reviews the way the caller's `Sort Trustpilot Reviews` node already reads Apify items.
 
 That node looks for: rating|stars, text|reviewBody|body, title, publishedDate|experienceDate|date,
 country, reviewId, companyUrl|businessUrl, companyDomain|companyWebsite, companyName|businessName,

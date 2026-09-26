@@ -1,4 +1,4 @@
-"""Self-hosted Trustpilot review scraper, a drop-in for the Apify actor used by the Stage 4 workflow."""
+"""Self-hosted Trustpilot review scraper, a drop-in for the Apify automation-lab~trustpilot actor."""
 
 import argparse
 import json
@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="trustpilot-reviews")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    serve = sub.add_parser("serve", help="run the HTTP service n8n calls")
+    serve = sub.add_parser("serve", help="run the HTTP service")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
     serve.set_defaults(func=_cmd_serve)

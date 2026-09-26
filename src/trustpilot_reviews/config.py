@@ -22,13 +22,13 @@ def _env_bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    # Shared secret n8n sends as `Authorization: Bearer <token>`. Empty = no auth (local testing only).
+    # Shared secret the caller sends as `Authorization: Bearer <token>`. Empty = no auth (local testing only).
     api_token: str = os.environ.get("API_TOKEN", "").strip()
-    # Optional proxy URL passed straight to Scrapling (same variable name as the old GitHub Actions scraper).
+    # Optional proxy URL passed straight to Scrapling.
     proxy: str | None = os.environ.get("SCRAPER_PROXY", "").strip() or None
-    # How many browser fetches may run at once. Stage 4 fires three band calls in parallel per brand.
+    # How many browser fetches may run at once. The caller fires three band calls in parallel per brand.
     max_concurrency: int = _env_int("MAX_CONCURRENCY", 3)
-    # Per-page browser timeout. Stage 4 allows 250s per band call, so keep pages well under that.
+    # Per-page browser timeout. The caller's node timeout is 250 s per band call, so keep pages well under that.
     fetch_timeout_ms: int = _env_int("FETCH_TIMEOUT_MS", 30_000)
     # Trustpilot sits behind a CloudFront JS challenge, not Cloudflare. The stealth browser passes it
     # without the Cloudflare solver, but the flag is kept so it can be flipped without a deploy.
@@ -42,7 +42,7 @@ class Settings:
     # Total wall-clock budget for one scrape. Nothing cancels a request once it starts - Starlette
     # does not cancel handlers on client disconnect, and the browser runs in an uncancellable
     # thread - so a caller that gives up does not free the browser. This is what frees it: the
-    # scrape stops starting new pages and returns what it has. Must stay under Stage 4's 250s.
+    # scrape stops starting new pages and returns what it has. Must stay under the caller's 250 s node timeout.
     scrape_budget_s: int = _env_int("SCRAPE_BUDGET_S", 200)
     # Pause between pages of the same band call, seconds.
     page_delay_s: float = float(os.environ.get("PAGE_DELAY_S", "2"))

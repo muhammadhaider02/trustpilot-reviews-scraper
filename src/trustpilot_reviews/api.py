@@ -1,13 +1,13 @@
-"""HTTP surface n8n calls in place of Apify's run-sync-get-dataset-items endpoint.
+"""HTTP surface the caller uses in place of Apify's run-sync-get-dataset-items endpoint.
 
-POST /trustpilot  -> JSON array of review items (same names Stage 4's Sort node reads from Apify)
-GET  /health      -> counters, useful for Pipeline Health Check
+POST /trustpilot  -> JSON array of review items (same names the caller's Sort node reads from Apify)
+GET  /health      -> counters, useful for uptime and health checks
 
 A 200 may be a partial result: if the scrape hits SCRAPE_BUDGET_S it returns the reviews it
 already collected and sets `X-Truncated: true`. The body looks identical to a complete run.
 
-Error contract, matched to Stage 4's retry logic:
-  200 []                brand has no Trustpilot page -> Stage 4 reads `no_results`, as it did
+Error contract, matched to the caller's retry logic:
+  200 []                brand has no Trustpilot page -> the caller reads `no_results`, as it did
                         from Apify's empty dataset; `X-No-Trustpilot-Page: true` says why
   400 {"error": {...}}  invalid domain               -> brand-side, burns one of its retries
   503 {"error": {...}}  we were blocked / browser died -> vendor failure, no retry burned
@@ -49,8 +49,8 @@ app = FastAPI(title="trustpilot-reviews", version=__version__, lifespan=lifespan
 
 
 class ScrapeRequest(BaseModel):
-    """Accepts both our own field names and the Apify body Stage 4 sends today, so the n8n change
-    can be as small as swapping the URL."""
+    """Accepts both our own field names and the Apify body the caller already sends, so switching
+    over can be as small as swapping the URL."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -63,18 +63,18 @@ class ScrapeRequest(BaseModel):
     # became months=12, applied as Trustpilot's own window and as a cut-off. That was faithful to
     # the field and unfaithful to the actor's output, which is not windowed consistently. Measured
     # against Trustpilot's own counts on 21 Sep 2026 -
-    #   lemieuxproducts.com  14 reviews, 0 in the last 12 months; Apify total 14, kept 8 (the 8 of
-    #                        14 that are under 3 years old, which is the workflow's own filter)
-    #   prxperformance.com   3 reviews, 0 in the window; Apify total 3, kept 2 (the 2 under 3 years)
-    #   sinopetech.com       1 review from 2021, 0 in the window; Apify score 3.2, all_irrelevant
-    #   grip6.com            7287 reviews, 2 in the window; Apify kept 11 = exactly the 11 under
-    #                        3 years, and no 12-month window at any date holds more than 5 of them
-    #   lemieux.com          37 reviews, 24 in the window; Apify kept 21 = the window, all-time is 32
-    #   selkirk.com          584 reviews; Apify kept 29 = the window, all-time is 42
+    #   fieldcrestproducts.com  14 reviews, 0 in the last 12 months; Apify total 14, kept 8 (the 8
+    #                           of 14 that are under 3 years old, which is the caller's own filter)
+    #   apexlift.com            3 reviews, 0 in the window; Apify total 3, kept 2 (the 2 under 3 years)
+    #   quarrytech.com          1 review from 2021, 0 in the window; Apify score 3.2, all_irrelevant
+    #   talon9.com              7287 reviews, 2 in the window; Apify kept 11 = exactly the 11 under
+    #                           3 years, and no 12-month window at any date holds more than 5 of them
+    #   fieldcrest.com          37 reviews, 24 in the window; Apify kept 21 = the window, all-time is 32
+    #   ridgelinesports.com     584 reviews; Apify kept 29 = the window, all-time is 42
     # So honouring the window returned 0 / 0 / 0 / 2 rows for the first four against a baseline
     # that had reviews for all of them, while the last two say the actor did window sometimes.
     # No single rule reproduces both; ignoring the window is the one that is never below the
-    # baseline, and age is the workflow's job anyway (1,095 days on `publishedDate`). An explicit
+    # baseline, and age is the caller's job anyway (1,095 days on `publishedDate`). An explicit
     # integer `months` still works for anyone who wants a window.
     date: str | None = None
     include_company_info: bool = Field(default=True, validation_alias=AliasChoices("includeCompanyInfo", "include_company_info"))
@@ -135,7 +135,7 @@ async def trustpilot(req: ScrapeRequest):
         counters["not_found"] += 1
         return JSONResponse(status_code=400, content=_error_body(e, 400))
     except NoTrustpilotPage:
-        # Apify's dataset was empty for a domain with no Trustpilot page, and Stage 4 read that as
+        # Apify's dataset was empty for a domain with no Trustpilot page, and the caller read that as
         # `no_results`. Answering a 404 error item instead made the same brand `request_failed`,
         # and because the message says "not found" it spent one of the brand's three retries on a
         # page that no retry will make appear. Measured 19 Sep 2026: 5 of the 26 baseline brands.

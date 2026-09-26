@@ -9,7 +9,7 @@ from trustpilot_reviews.scraper import NoTrustpilotPage, ScrapeBlocked, parse_pa
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-# The exact field lookups Stage 4's `Sort Trustpilot Reviews` node performs on each Apify item.
+# The exact field lookups the caller's `Sort Trustpilot Reviews` node performs on each Apify item.
 SORT_NODE_FIELDS = {"rating", "text", "title", "publishedDate", "country", "reviewId", "companyUrl", "companyName", "companyTrustScore", "companyTotalReviews"}
 
 
@@ -77,7 +77,7 @@ def test_truncated_result_is_flagged_in_the_headers(client, monkeypatch):
 
 
 def test_post_accepts_apify_body_verbatim(client, monkeypatch):
-    """The body Stage 4 sends Apify today should work unchanged, so the n8n edit is just the URL."""
+    """The body the caller sends Apify should work unchanged, so switching over is just the URL."""
     seen = {}
 
     def fake_scrape(domain, stars, max_reviews, months):
@@ -88,7 +88,7 @@ def test_post_accepts_apify_body_verbatim(client, monkeypatch):
     body = {"companyUrls": ["gymshark.com"], "stars": ["1", "2"], "maxReviewsPerCompany": 30, "sort": "recency", "date": "last12months", "includeCompanyInfo": True}
     r = client.post("/trustpilot", json=body)
     assert r.status_code == 200
-    # `date` is ignored: Apify's output for this body is the all-time set (lemieuxproducts.com
+    # `date` is ignored: Apify's output for this body is the all-time set (fieldcrestproducts.com
     # has 0 reviews in the last 12 months and Apify returned all 14), so months must be None.
     assert seen == {"domain": "gymshark.com", "stars": [1, 2], "max_reviews": 30, "months": None}
 
@@ -108,7 +108,7 @@ def test_native_months_is_still_honoured(client, monkeypatch):
 
 
 def test_missing_page_is_an_empty_array_not_an_error(client, monkeypatch):
-    # Apify returned an empty dataset for a domain with no Trustpilot page and Stage 4 read that as
+    # Apify returned an empty dataset for a domain with no Trustpilot page and the caller read that as
     # `no_results`; a 404 error item read as `request_failed` and spent one of the brand's retries.
     def fake_scrape(*a, **k):
         raise NoTrustpilotPage("404 not found: no Trustpilot page at https://www.trustpilot.com/review/x.com")

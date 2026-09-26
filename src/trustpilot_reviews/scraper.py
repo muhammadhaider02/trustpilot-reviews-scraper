@@ -42,21 +42,21 @@ class TrustpilotError(Exception):
 
 class NoTrustpilotPage(TrustpilotError):
     """Brand has no Trustpilot profile. The API answers this with `200 []`, the empty dataset Apify
-    returned for the same domains, so Stage 4 reads `no_results` and spends no retry on a page that
+    returned for the same domains, so the caller reads `no_results` and spends no retry on a page that
     no retry can produce. The message keeps '404' / 'not found' for the CLI and the logs."""
 
     status = 404
 
 
 class ScrapeBlocked(TrustpilotError):
-    """We were challenged or served a non-review page. This is OUR problem (vendor failure in Stage 4
+    """We were challenged or served a non-review page. This is OUR problem (vendor failure in the caller's
     terms), so the message must NOT contain '404', 'not found', 'no such page' or 'invalid url'."""
 
     status = 503
 
 
 class ScrapeFailed(TrustpilotError):
-    """Browser or network failure. Also a vendor failure from Stage 4's point of view."""
+    """Browser or network failure. Also a vendor failure from the caller's point of view."""
 
     status = 503
 
@@ -248,7 +248,7 @@ def fetch_html(url: str) -> tuple[int, str]:
             url,
             headless=True,
             # Load-bearing: the CloudFront JS challenge only clears if the browser is given time to
-            # run the page's JS. Measured 2026-09-16 and again 2026-09-19 from the VPS: returning
+            # run the page's JS. Measured 2026-09-16 and again 2026-09-19 from the host: returning
             # straight after `load` gives HTTP 403 in ~1.2s on every page. Until 2026-09-19 that time
             # came from network_idle=True, which was the wrong wait: Trustpilot keeps background
             # requests open, so Scrapling's networkidle wait timed out (silently, at FETCH_TIMEOUT_MS)
@@ -275,7 +275,7 @@ def fetch_html(url: str) -> tuple[int, str]:
         # Removed 2026-09-17: humanize / os_randomize / geoip. They are Camoufox-era (scrapling
         # 0.2.x) arguments that do not exist in 0.4.15 - the msgspec validator absorbs unknown
         # keys silently, so they read as active stealth while doing nothing at all. If Trustpilot
-        # starts challenging this server, do not rule these out; they were never on.
+        # starts challenging this host, do not rule these out; they were never on.
     except Exception as e:  # noqa: BLE001 - anything from the browser stack is a vendor failure
         raise ScrapeFailed(f"browser fetch failed: {type(e).__name__}: {e}"[:300]) from e
     return int(page.status), _html_of(page)

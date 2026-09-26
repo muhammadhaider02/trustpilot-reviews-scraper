@@ -20,7 +20,7 @@ from trustpilot_reviews.scraper import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-# Copied verbatim from Stage 4's `Parse Report` node. Brand-side errors must match; vendor-side must not.
+# Copied verbatim from the caller's `Parse Report` node. Brand-side errors must match; vendor-side must not.
 BRAND_ERROR_RE = re.compile(r"\b404\b|not found|no such (company|business|page)|invalid (url|domain)", re.I)
 
 
@@ -77,7 +77,7 @@ def two_page_fetcher(calls):
         ("gymshark.com", "gymshark.com"),
         ("https://www.gymshark.com/", "gymshark.com"),
         ("HTTP://Gymshark.COM/collections?x=1", "gymshark.com"),
-        ("  nobltravel.com  ", "nobltravel.com"),
+        ("  wayfarerbags.com  ", "wayfarerbags.com"),
     ],
 )
 def test_clean_domain(raw, expected):
@@ -186,7 +186,7 @@ def test_scrape_404_is_brand_error():
     with pytest.raises(NoTrustpilotPage) as ei:
         scrape("no-such-brand-zz9q.com", [1, 2], fetcher=fetcher)
     assert ei.value.status == 404
-    assert BRAND_ERROR_RE.search(str(ei.value)), "Stage 4 must classify this as the brand's problem"
+    assert BRAND_ERROR_RE.search(str(ei.value)), "the caller must classify this as the brand's problem"
 
 
 def test_scrape_block_is_vendor_error_and_retries_once():
@@ -200,7 +200,7 @@ def test_scrape_block_is_vendor_error_and_retries_once():
         scrape("gymshark.com", [1, 2], fetcher=fetcher)
     assert len(calls) == 2
     assert ei.value.status == 503
-    assert not BRAND_ERROR_RE.search(str(ei.value)), "a block must NOT burn one of the brand's retries in Stage 4"
+    assert not BRAND_ERROR_RE.search(str(ei.value)), "a block must NOT burn one of the brand's retries in the caller"
 
 
 def test_scrape_missing_next_data_is_vendor_error():
@@ -248,7 +248,7 @@ def test_scrape_budget_never_skips_the_first_page(budget):
     budget(0)  # no budget at all
     calls = []
 
-    # Returning zero reviews would read to Stage 4 as "this brand has no reviews in this band",
+    # Returning zero reviews would read to the caller as "this brand has no reviews in this band",
     # which is a data lie. Page 1 is always attempted, however late we are.
     res = scrape("gymshark.com", [1, 2], max_reviews=30, months=12, fetcher=two_page_fetcher(calls))
     assert len(calls) == 1

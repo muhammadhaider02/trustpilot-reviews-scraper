@@ -1,10 +1,11 @@
 [project]
 name = "trustpilot-reviews"
 version = "0.1.0"
-description = "Self-hosted Trustpilot review scraper: a drop-in HTTP replacement for the Apify actor used by the Stage 4 research workflow"
+description = "Self-hosted Trustpilot review scraper: a drop-in HTTP replacement for the Apify automation-lab~trustpilot actor"
 readme = "README.md"
+license = "MIT"
 authors = [
-    { name = "Haider", email = "haider@ecombench.com" }
+    { name = "Haider Akbar", email = "muhammadhaiderakbar@gmail.com" }
 ]
 requires-python = ">=3.11"
 dependencies = [
